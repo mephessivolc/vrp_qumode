@@ -1,0 +1,13 @@
+services:
+  app:
+    # Sobrescreve a imagem base para usar a versão compilada com CUDA/GPU no servidor
+    build:
+      args:
+        - BASE_IMAGE=tensorflow/tensorflow:2.15.0-gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
