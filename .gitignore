@@ -1,0 +1,22 @@
+############################
+# VS Code
+############################
+
+*.pyc
+*.code-workspace
+
+.ipynb_checkpoints/
+__pycache__/
+.venv/
+.devcontainer
+.vscode
+dev/
+
+.cache/
+result/
+
+############################
+# Sistemas operacionais
+############################
+.DS_Store
+Thumbs.db
