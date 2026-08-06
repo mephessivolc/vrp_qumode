@@ -5,14 +5,17 @@ import logging
 import pandas as pd
 from metrics import ExperimentResult
 
+# --- INTEGRAÇÃO COM PATH.PY ---
+# Importa as funções responsáveis pela gestão de caminhos
+from path import get_results_path, get_images_path, get_path
+
 
 class ExperimentLogger:
     """
     Gerenciador de logs no terminal e de persistência de experimentos.
-    Separa a estrutura de saída na pasta 'result', dividindo entre TSP e VRP.
+    Delega a gestão dos caminhos de saída para o módulo path.py.
     """
-    def __init__(self, problem_type: str = "TSP", base_dir: str = "result"):
-        self.base_dir = base_dir
+    def __init__(self, problem_type: str = "TSP"):
         self.problem_type = problem_type
         
         # Configuração do logger do Python para terminal
@@ -36,33 +39,33 @@ class ExperimentLogger:
 
     # --- MÉTODOS DE GERENCIAMENTO DE DIRETÓRIOS E PERSISTÊNCIA ---
     def _get_problem_paths(self, problem_type: str = None):
-        """Retorna os caminhos organizados para o tipo de problema especificado."""
+        """Retorna os caminhos organizados integrados via path.py."""
         target_problem = problem_type if problem_type is not None else self.problem_type
         folder_name = target_problem.lower()
-        prob_dir = os.path.join(self.base_dir, folder_name)
         
-        data_dir = os.path.join(prob_dir, "data")
-        figures_dir = os.path.join(prob_dir, "figures")
-        csv_path = os.path.join(prob_dir, f"{folder_name}_summary.csv")
-
-        os.makedirs(data_dir, exist_ok=True)
-        os.makedirs(figures_dir, exist_ok=True)
+        # Obtém os diretórios absolutos dinamicamente do path.py
+        data_dir = get_results_path(problem_type=folder_name)
+        figures_dir = get_images_path(problem_type=folder_name)
+        
+        # O CSV consolidado fica na raiz da pasta do problema (ex: .../vrp/vrp_summary.csv)
+        prob_dir = get_path(problem_type=folder_name).parent
+        csv_path = prob_dir / f"{folder_name}_summary.csv"
 
         return data_dir, figures_dir, csv_path
 
     def get_figures_dir(self, problem_type: str = None) -> str:
         """Helper para obter o diretório correto onde salvar plots e gráficos."""
-        _, figures_dir, _ = self._get_problem_paths(problem_type)
-        return figures_dir
+        _, figures_dir, _ = self._get_problem_paths(problem_type, variable_type)
+        return str(figures_dir)
 
     def save_experiment(self, result: ExperimentResult) -> str:
         """Salva a execução em JSON individual e atualiza o CSV acumulativo da modalidade."""
-        data_dir, _, csv_path = self._get_problem_paths(result.problem_type)
+        data_dir, _, csv_path = self._get_problem_paths(result.problem_type, result.variable_type)
         res_dict = result.to_dict()
 
         # 1. Salva o JSON completo (com o histórico das iterações)
         json_filename = f"{result.solver_name.lower()}_{result.experiment_id}.json"
-        json_path = os.path.join(data_dir, json_filename)
+        json_path = data_dir / json_filename
         
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(res_dict, f, indent=4, ensure_ascii=False)
@@ -82,5 +85,5 @@ class ExperimentLogger:
         else:
             df_row.to_csv(csv_path, mode='a', header=False, index=False)
 
-        self.info(f"Registrado com sucesso em: result/{result.problem_type.lower()}/")
-        return json_path
+        self.info(f"Registrado com sucesso em: {json_path}")
+        return str(json_path)

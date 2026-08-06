@@ -32,7 +32,7 @@ class ExperimentResult:
     ground_state_energy: float
 
     # --- Solução Quântica (QAOA ou VQE) ---
-    solver_name: str         # "CV-QAOA" ou "CV-VQE"
+    solver_name: str         # "QAOA" ou "VQE"
     quantum_cost: float
     quantum_route: Union[List[int], Dict[int, List[int]]]
     quantum_time_sec: float

@@ -1,9 +1,23 @@
 # path.py
 from pathlib import Path
 from typing import Union
+import os
 
-# Ancora o projeto no diretório raiz onde este arquivo path.py reside
-ROOT_DIR = Path(__file__).resolve().parent
+# # Ancora local do projeto
+# PROJECT_ROOT = Path(__file__).resolve().parent
+
+# # Define o caminho base de armazenamento (prioriza /home-ext/clovis se existir)
+# EXTERNAL_BASE = Path("/home-ext/clovis/")
+# ROOT_DIR = EXTERNAL_BASE if EXTERNAL_BASE.exists() else PROJECT_ROOT / "result"
+
+# Lê da variável de ambiente ou usa /home-ext/clovis se existir, senão usa 'result/' local
+env_path = os.getenv("OUTPUT_DIR")
+if env_path:
+    ROOT_DIR = Path(env_path)
+elif Path("/home-ext/clovis").exists():
+    ROOT_DIR = Path("/home-ext/clovis/")
+else:
+    ROOT_DIR = Path(__file__).resolve().parent / "result"
 
 
 def get_path(
@@ -12,23 +26,10 @@ def get_path(
     is_result: bool = False
 ) -> Path:
     """
-    Retorna o diretório base para saída de arquivos na pasta 'result/'.
+    Retorna o diretório base para saída de arquivos em '/home-ext/clovis/result/'.
     Organiza por tipo de problema ('tsp' ou 'vrp') e por categoria ('data' ou 'figures').
-
-    Parameters
-    ----------
-    problem_type : str, optional
-        Tipo de problema ('tsp' ou 'vrp'). Padrão é 'tsp'.
-    subfolder : Union[str, Path], optional
-        Subpasta adicional caso necessário.
-    is_result : bool, optional
-        Se True, mapeia para a pasta 'data' (JSONs/CSVs). Caso contrário, para 'figures' (Imagens/Plots).
-
-    Returns
-    -------
-    Path
-        Caminho absoluto para o diretório solicitado.
     """
+    # Salva dentro de /home-ext/clovis/result/vrp/... (ou /home-ext/clovis/vrp/...)
     base_dir = ROOT_DIR / "result" / problem_type.lower()
     
     category_folder = "data" if is_result else "figures"
@@ -42,12 +43,12 @@ def get_path(
 
 
 def get_images_path(subfolder: Union[str, Path] = None, problem_type: str = "tsp") -> Path:
-    """Atalho para obter a pasta de figuras/imagens (ex: 'result/tsp/figures')."""
+    """Atalho para obter a pasta de figuras/imagens."""
     return get_path(problem_type=problem_type, subfolder=subfolder, is_result=False)
 
 
 def get_results_path(subfolder: Union[str, Path] = None, problem_type: str = "tsp") -> Path:
-    """Atalho para obter a pasta de dados/resultados JSON (ex: 'result/tsp/data')."""
+    """Atalho para obter a pasta de dados/resultados JSON."""
     return get_path(problem_type=problem_type, subfolder=subfolder, is_result=True)
 
 
@@ -55,6 +56,7 @@ if __name__ == "__main__":
     print("==========================================================")
     print("      TESTANDO NOVO GERENCIADOR DE CAMINHOS (path.py)     ")
     print("==========================================================")
+    print(f"Diretório Raiz Configurado: {ROOT_DIR}\n")
 
     tests = [
         ("Imagens TSP", lambda: get_images_path(problem_type="tsp")),

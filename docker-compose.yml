@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     # Mapeia para usar o seu usuário atual do servidor (ex: 1000:1000)
-    user: "${UID:-1000}:${GID:-1000}"
+    user: "${UID:-1025}:${GID:-1025}"
     volumes:
       - .:/workspace:cached
+      - /home-ext/clovis:/home-ext/clovis
     command: sleep infinity

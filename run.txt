@@ -1,0 +1,3 @@
+docker compose run --rm -e MPLCONFIGDIR=/dev/shm -e TMPDIR=/dev/shm -e NUMBA_CACHE_DIR=/dev/shm app python main.py
+
+sftp://clovis@177.104.60.30
