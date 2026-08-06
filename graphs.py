@@ -176,6 +176,8 @@ class GraphBuilder:
 
     def plot_tsp_route(self, solution_vector: Union[List, tuple, np.ndarray], prefix: str = "tsp") -> Path:
         out_dir = Path(self.logger.get_figures_dir("TSP"))
+
+        # Converte e sanitiza a rota para garantir nós válidos
         route = self._convert_vector_to_route(solution_vector)
         full_cycle = route + [route[0]]
 
