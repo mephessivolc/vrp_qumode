@@ -8,4 +8,4 @@ services:
     volumes:
       - .:/workspace:cached
       - /home-ext/clovis:/home-ext/clovis
-    command: sleep infinity
+    command: python main.py
