@@ -28,12 +28,14 @@ class GraphBuilder:
         graph_type: str = "random",
         coords: Optional[Union[np.ndarray, List[Tuple[float, float]]]] = None,
         matrix: Optional[Union[np.ndarray, List[List[float]]]] = None,
-        logger: Optional[ExperimentLogger] = None
+        logger: Optional[ExperimentLogger] = None,
+        variable_type_path: str = "QUMODES"
     ):
         self.seed = seed
         self.logger = logger if logger is not None else ExperimentLogger()
         self.graph_type = graph_type
         self.coords = None
+        self.variable_type_path = variable_type_path
 
         if matrix is not None:
             # 1. Modo Matriz Direta
@@ -145,7 +147,7 @@ class GraphBuilder:
         return valid_route[:self.n]
 
     def plot_original_graph(self, prefix: str = "graph", problem_type: str = "TSP") -> Path:
-        out_dir = Path(self.logger.get_figures_dir(problem_type))
+        out_dir = Path(self.logger.get_figures_dir(self.variable_type_path, problem_type))
 
         G = nx.Graph()
         for i in range(self.n):
@@ -175,7 +177,7 @@ class GraphBuilder:
         return orig_path
 
     def plot_tsp_route(self, solution_vector: Union[List, tuple, np.ndarray], prefix: str = "tsp") -> Path:
-        out_dir = Path(self.logger.get_figures_dir("TSP"))
+        out_dir = Path(self.logger.get_figures_dir(variable_type=self.variable_type_path, problem_type="TSP"))
 
         # Converte e sanitiza a rota para garantir nós válidos
         route = self._convert_vector_to_route(solution_vector)
@@ -227,7 +229,7 @@ class GraphBuilder:
         return route_path
 
     def plot_vrp_routes(self, routes: Dict[int, List[int]], prefix: str = "vrp") -> Path:
-        out_dir = Path(self.logger.get_figures_dir("VRP"))
+        out_dir = Path(self.logger.get_figures_dir(variable_type=self.variable_type_path, problem_type="VRP"))
 
         G_base = nx.Graph()
         for i in range(self.n):

@@ -21,7 +21,8 @@ else:
 
 
 def get_path(
-    problem_type: str = "tsp", 
+    variable_type: str = "qumodes",
+    problem_type: str = "tsp",
     subfolder: Union[str, Path] = None, 
     is_result: bool = False
 ) -> Path:
@@ -30,7 +31,7 @@ def get_path(
     Organiza por tipo de problema ('tsp' ou 'vrp') e por categoria ('data' ou 'figures').
     """
     # Salva dentro de /home-ext/clovis/result/vrp/... (ou /home-ext/clovis/vrp/...)
-    base_dir = ROOT_DIR / "result" / problem_type.lower()
+    base_dir = ROOT_DIR / "result" / variable_type.lower() / problem_type.lower()
     
     category_folder = "data" if is_result else "figures"
     target_path = base_dir / category_folder
@@ -42,14 +43,14 @@ def get_path(
     return target_path
 
 
-def get_images_path(subfolder: Union[str, Path] = None, problem_type: str = "tsp") -> Path:
+def get_images_path(variable_type: str = "qumodes", problem_type: str = "tsp", subfolder: Union[str, Path] = None) -> Path:
     """Atalho para obter a pasta de figuras/imagens."""
-    return get_path(problem_type=problem_type, subfolder=subfolder, is_result=False)
+    return get_path(variable_type=variable_type, problem_type=problem_type, subfolder=subfolder, is_result=False)
 
 
-def get_results_path(subfolder: Union[str, Path] = None, problem_type: str = "tsp") -> Path:
+def get_results_path(variable_type: str = "qumodes", problem_type: str = "tsp", subfolder: Union[str, Path] = None) -> Path:
     """Atalho para obter a pasta de dados/resultados JSON."""
-    return get_path(problem_type=problem_type, subfolder=subfolder, is_result=True)
+    return get_path(variable_type=variable_type, problem_type=problem_type, subfolder=subfolder, is_result=True)
 
 
 if __name__ == "__main__":
