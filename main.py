@@ -77,13 +77,14 @@ def run(
     graph_type: str = "random", 
     device: str = "cpu",
     seed: int = 42,
-    save_outputs: bool = True
+    save_outputs: bool = True,
+    variable_type_path: str = "QUMODES"
 ) -> dict:
     """Orquestrador principal para simulações e experimentos do VRP em CV-VQE."""
     str_problem_type = "TSP" if num_vehicles == 1 else "VRP"
     logger = ExperimentLogger(problem_type=str_problem_type)
     logger.info(
-        f"Iniciando Experimento {str_problem_type} (N={n_cities}, Vehicles={num_vehicles}, Layers={layers}, "
+        f"Iniciando Experimento {variable_type_path} {str_problem_type} (N={n_cities}, Vehicles={num_vehicles}, Layers={layers}, "
         f"Reps={reps}, Opt={optimizer_method}, LR={lr}, Device={device.upper()}, MaxIter={maxiter})"
     )
 
@@ -168,6 +169,7 @@ def run(
     experiment_res = ExperimentResult(
         experiment_id=exp_id,
         problem_type=str_problem_type,
+        variable_type=variable_type_path,
         timestamp=now_str,
         seed=seed,
         n_cities=n_cities,
@@ -272,6 +274,22 @@ if __name__ == "__main__":
 
     from itertools import product
 
+    run(
+        n_cities=5,
+        num_vehicles=1,
+        layers=2,
+        reps=1,
+        maxiter=5,
+        lmbda=10.0,
+        lmbda_empty=0.0,
+        optimizer_method="ADAM",   # Corrigido de cobyla para ADAM
+        lr=0.01,                   # LR ajustado para saltos adequados no espaço de fase
+        graph_type="random",
+        device="cpu",
+        seed=42,
+        save_outputs=True,
+        variable_type_path="QUMODES"
+    )
     # vehicle = [1, 2, 3, 4]
     # layer = [1, 2, 3,]
     # reps = [1, 2, 3]

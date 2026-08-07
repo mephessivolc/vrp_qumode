@@ -11,10 +11,10 @@ ENV TMPDIR=/tmp
 
 RUN mkdir -p /tmp/matplotlib && chmod -R 777 /tmp /tmp/matplotlib
 
-RUN useradd -m -s /bin/bash -u 1025 clovis \
-    && apt-get update && apt-get install -y sudo \
-    && echo "clovis ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers \
-    && rm -rf /var/lib/apt/lists/*
+# RUN useradd -m -s /bin/bash -u 1025 clovis \
+#     && apt-get update && apt-get install -y sudo \
+#     && echo "clovis ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers \
+#     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
