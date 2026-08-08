@@ -58,11 +58,11 @@ class ExperimentLogger:
         variable_type_name, folder_name, sub_folder_name = self._manage_names(variable_type, problem_type, sub_folder)
         
         # Obtém os diretórios absolutos dinamicamente do path.py
-        data_dir = get_results_path(variable_type=variable_type_name, problem_type=folder_name, subfolder=sub_folder_name)
-        figures_dir = get_images_path(variable_type=variable_type_name, problem_type=folder_name, subfolder=sub_folder_name)
+        data_dir = get_results_path(variable_type=variable_type_name, problem_type=folder_name, sub_folder=sub_folder_name)
+        figures_dir = get_images_path(variable_type=variable_type_name, problem_type=folder_name, sub_folder=sub_folder_name)
         
         # O CSV consolidado fica na raiz da pasta do problema (ex: .../vrp/vrp_summary.csv)
-        prob_dir = get_path(variable_type=variable_type_name, problem_type=folder_name, subfolder=sub_folder_name).parent
+        prob_dir = get_path(variable_type=variable_type_name, problem_type=folder_name, sub_folder=sub_folder_name).parent
         str_target_sub_folder = f"{sub_folder_name}_"
         csv_path = prob_dir / f"{variable_type_name}_{folder_name}_summary.csv"
 

@@ -1,24 +1,34 @@
 # vrp/hamiltonian.py
 import tensorflow as tf
 import numpy as np
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Union
 
 class Hamiltonian:
     def __init__(
         self, 
         dist_matrix: np.ndarray, 
         num_vehicles: int = 2, 
-        lmbda: float = 100.0,
-        lmbda_empty: float = 0.0,
+        lmbda: Union[float, None] = None,
+        lmbda_empty: Union[float, None] = None,
     ):
         self.dist_matrix = np.array(dist_matrix, dtype=np.float32)
         self.num_nodes = len(dist_matrix)
         self.num_vehicles = num_vehicles
         self.num_free_cities = self.num_nodes - 1
-        self.lmbda = lmbda
+        if lmbda is not None:
+            if not isinstance(lmbda, (float, int)):
+                raise TypeError("This 'lmbda' variable must be a float.")
+            self.lmbda = float(lmbda)
+        else:
+            self.lmbda = self.num_nodes * np.max(self.dist_matrix)
         
-        # Se lmbda_empty for 0, utiliza lmbda como fallback (útil para VRP)
-        self.lmbda_empty = lmbda_empty if lmbda_empty > 0.0 else lmbda
+        if lmbda_empty is not None:
+            if not isinstance(lmbda_empty, (float, int)):
+                raise TypeError("This 'lmbda_empty' variable must be a float.")
+            self.lmbda_empty = float(lmbda_empty)
+        else:
+            self.lmbda_empty = self.lmbda
+
         self.max_steps = self.num_free_cities
 
         # Flag para chavear entre TSP (1 veículo) e VRP (> 1 veículos)

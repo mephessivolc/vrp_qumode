@@ -3,13 +3,6 @@ from pathlib import Path
 from typing import Union
 import os
 
-# # Ancora local do projeto
-# PROJECT_ROOT = Path(__file__).resolve().parent
-
-# # Define o caminho base de armazenamento (prioriza /home-ext/clovis se existir)
-# EXTERNAL_BASE = Path("/home-ext/clovis/")
-# ROOT_DIR = EXTERNAL_BASE if EXTERNAL_BASE.exists() else PROJECT_ROOT / "result"
-
 # Lê da variável de ambiente ou usa /home-ext/clovis se existir, senão usa 'result/' local
 env_path = os.getenv("OUTPUT_DIR")
 if env_path:
@@ -21,59 +14,67 @@ else:
 
 
 def get_path(
-    variable_type: str = "qumodes",
+    variable_type: Union[str, Path] = "qumodes",
     problem_type: str = "tsp",
-    subfolder: Union[str, Path] = None, 
+    sub_folder: Union[str, Path] = None, 
     is_result: bool = False
 ) -> Path:
     """
-    Retorna o diretório base para saída de arquivos em '/home-ext/clovis/result/'.
-    Organiza por tipo de problema ('tsp' ou 'vrp') e por categoria ('data' ou 'figures').
+    Retorna o diretório base para saída de arquivos e CRIA automaticamente
+    todas as pastas e subpastas informadas (ex: 'pasta1/pasta2').
     """
-    # Salva dentro de /home-ext/clovis/result/vrp/... (ou /home-ext/clovis/vrp/...)
-    base_dir = ROOT_DIR / "result" / variable_type.lower() / problem_type.lower()
+    # Converter para Path garante que barras '/' ou '\' virem estrutura de diretórios
+    var_path = Path(str(variable_type).lower())
+    
+    base_dir = ROOT_DIR / "result" / var_path / str(problem_type).lower()
+
+    
+    # Se sub_folder for 'pasta1/pasta2', ela é anexada corretamente ao caminho
+    if sub_folder:
+        base_dir = base_dir / Path(str(sub_folder).lower())
     
     category_folder = "data" if is_result else "figures"
     target_path = base_dir / category_folder
 
-    if subfolder:
-        target_path = target_path / subfolder
-
+    # parents=True força a criação de TODAS as pastas pai na árvore (pasta1, pasta2, etc)
     target_path.mkdir(parents=True, exist_ok=True)
     return target_path
 
 
-def get_images_path(variable_type: str = "qumodes", problem_type: str = "tsp", subfolder: Union[str, Path] = None) -> Path:
+def get_images_path(variable_type: Union[str, Path] = "qumodes", problem_type: str = "tsp", sub_folder: Union[str, Path] = None) -> Path:
     """Atalho para obter a pasta de figuras/imagens."""
-    return get_path(variable_type=variable_type, problem_type=problem_type, subfolder=subfolder, is_result=False)
+    return get_path(variable_type=variable_type, problem_type=problem_type, sub_folder=sub_folder, is_result=False)
 
 
-def get_results_path(variable_type: str = "qumodes", problem_type: str = "tsp", subfolder: Union[str, Path] = None) -> Path:
-    """Atalho para obter a pasta de dados/resultados JSON."""
-    return get_path(variable_type=variable_type, problem_type=problem_type, subfolder=subfolder, is_result=True)
+def get_results_path(variable_type: Union[str, Path] = "qumodes", problem_type: str = "tsp", sub_folder: Union[str, Path] = None) -> Path:
+    """Atalho para obter a pasta de dados/resultados JSON/CSV."""
+    return get_path(variable_type=variable_type, problem_type=problem_type, sub_folder=sub_folder, is_result=True)
+
+
+def get_file_path(
+    filename: str,
+    variable_type: Union[str, Path] = "qumodes",
+    problem_type: str = "tsp",
+    sub_folder: Union[str, Path] = None,
+    is_result: bool = True
+) -> Path:
+    """
+    Função utilitária para quando você quer obter o caminho completo do ARQUIVO.
+    Cria todas as pastas pai e retorna o caminho com o nome do arquivo.
+    """
+    folder = get_path(variable_type=variable_type, problem_type=problem_type, sub_folder=sub_folder, is_result=is_result)
+    return folder / filename
 
 
 if __name__ == "__main__":
     print("==========================================================")
-    print("      TESTANDO NOVO GERENCIADOR DE CAMINHOS (path.py)     ")
+    print("      TESTANDO GERENCIADOR DE CAMINHOS COM SUBPASTAS      ")
     print("==========================================================")
-    print(f"Diretório Raiz Configurado: {ROOT_DIR}\n")
 
-    tests = [
-        ("Imagens TSP", lambda: get_images_path(problem_type="tsp")),
-        ("Imagens VRP", lambda: get_images_path(problem_type="vrp")),
-        ("Resultados Data TSP", lambda: get_results_path(problem_type="tsp")),
-        ("Resultados Data VRP", lambda: get_results_path(problem_type="vrp")),
-        ("Subpasta Personalizada TSP", lambda: get_results_path("run_01", problem_type="tsp")),
-    ]
+    # Teste enviando "pasta1/pasta2" no sub_folder
+    caminho = get_results_path(problem_type="tsp", sub_folder="pasta1/pasta2")
+    print(f"[OK] Pasta criada: {caminho}")
 
-    for name, func in tests:
-        try:
-            path_created = func()
-            print(f"[OK] {name}: {path_created}")
-        except Exception as e:
-            print(f"[ERRO] Falha ao criar diretório para '{name}': {e}")
-            raise e
-
-    print("==========================================================")
-    print("Todos os caminhos do path.py foram criados e validados!")
+    # Teste salvando arquivo direto com subpasta
+    arquivo = get_file_path("resultado.csv", problem_type="tsp", sub_folder="experimento_1/execucao_A")
+    print(f"[OK] Caminho do arquivo pronto para uso: {arquivo}")

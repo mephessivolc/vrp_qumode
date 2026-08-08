@@ -1,33 +1,32 @@
 services:
   app:
-  build:
-    context: .
-    dockerfile: Dockerfile
-    args:
-      - BASE_IMAGE=tensorflow/tensorflow:2.15.0-gpu
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - BASE_IMAGE=tensorflow/tensorflow:2.15.0-gpu
+    # Mapeia para usar o seu usuário atual do servidor (ex: 1000:1000)
+    user: "${UID:-1025}:${GID:-1025}"
+    volumes:
+      - .:/workspace:cached
+      - /home-ext/clovis:/home-ext/clovis
+    command: python main.py
+    # 1. Evita que o TensorFlow aloque toda a VRAM de uma vez
+    environment:
+      - TF_FORCE_GPU_ALLOW_GROWTH=true
 
-  # Mapeia para usar o seu usuário atual do servidor (ex: 1000:1000)
-  user: "${UID:-1025}:${GID:-1025}"
-  volumes:
-    - .:/workspace:cached
-    - /home-ext/clovis:/home-ext/clovis
-  command: python main.py
-  # 1. Evita que o TensorFlow aloque toda a VRAM de uma vez
-  environment:
-    - TF_FORCE_GPU_ALLOW_GROWTH=true
+    deploy:
+      resources:
+        # 2. LIMITES DE CPU E RAM (Impede o container de travar a máquina)
+        limits:
+          cpus: '8.0' # Limita a 8 núcleos virtuais de CPU
+          memory: 32G # Limita a 32 GB de RAM
 
-  deploy:
-    resources:
-      # 2. LIMITES DE CPU E RAM (Impede o container de travar a máquina)
-      limits:
-        cpus: '8.0' # Limita a 8 núcleos virtuais de CPU
-        memory: 32G # Limita a 32 GB de RAM
-
-      # 3. RESERVA DE GPU (Garantia de recursos sem monopolizar)
-      reservations:
-        devices:
-          - driver: nvidia
-            count: 1 # Usa apenas 1 GPU (em vez de 'all')
-            # Se preferir escolher uma GPU específica que esteja livre (ex: GPU 0):
-            # device_ids: ['0'] 
-            capabilities: [ gpu ]
+        # 3. RESERVA DE GPU (Garantia de recursos sem monopolizar)
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1 # Usa apenas 1 GPU (em vez de 'all')
+              # Se preferir escolher uma GPU específica que esteja livre (ex: GPU 0):
+              # device_ids: ['0'] 
+              capabilities: [ gpu ]

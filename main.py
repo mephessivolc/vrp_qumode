@@ -1,6 +1,7 @@
 # vrp/main.py
 import sys
 from pathlib import Path
+from typing import Union
 
 # --- RESOLUÇÃO DE IMPORTS ---
 SRC_DIR = Path(__file__).resolve().parent.parent
@@ -78,11 +79,16 @@ def run(
     device: str = "cpu",
     seed: int = 42,
     save_outputs: bool = True,
-    variable_type_path: str = "QUMODES"
+    variable_type_path: str = "QUMODES",
+    sub_folder: Union[str, None] = None
 ) -> dict:
     """Orquestrador principal para simulações e experimentos do VRP em CV-VQE."""
     str_problem_type = "TSP" if num_vehicles == 1 else "VRP"
-    logger = ExperimentLogger(problem_type=str_problem_type)
+    logger = ExperimentLogger(
+        variable_type=variable_type_path, 
+        problem_type=str_problem_type,
+        sub_folder=sub_folder
+        )
     logger.info(
         f"Iniciando Experimento {variable_type_path} {str_problem_type} (N={n_cities}, Vehicles={num_vehicles}, Layers={layers}, "
         f"Reps={reps}, Opt={optimizer_method}, LR={lr}, Device={device.upper()}, MaxIter={maxiter})"
@@ -95,7 +101,14 @@ def run(
     # 1. GERAÇÃO DO GRAFO (Inclui Depósito no índice 0)
     logger.info("1. Gerando matriz de adjacência do grafo (Depósito + Cidades)...")
     total_nodes = n_cities + 1
-    gb = GraphBuilder(n=total_nodes, seed=seed, graph_type=graph_type, logger=logger)
+    gb = GraphBuilder(
+        n=total_nodes, 
+        seed=seed, 
+        graph_type=graph_type, 
+        logger=logger, 
+        variable_type_path=variable_type_path,
+        sub_folder=sub_folder
+        )
 
     # 2. GROUND TRUTH (Força Bruta Exata)
     logger.info("2. Executando Busca Exhaustiva Clássica (Ground Truth)...")
@@ -210,7 +223,8 @@ def run(
 
     if save_outputs:
         # figures_dir = Path(logger.get_figures_dir("VRP"))
-        figures_dir = get_images_path(problem_type=str_problem_type.lower())
+        figures_dir = get_images_path(variable_type=variable_type_path,problem_type=str_problem_type.lower(),
+        sub_folder=sub_folder)
         
         # a) Salva JSON/CSV via Logger
         logger.save_experiment(experiment_res)
@@ -274,32 +288,56 @@ if __name__ == "__main__":
 
     from itertools import product
 
-    run(
-        n_cities=5,
-        num_vehicles=1,
-        layers=2,
-        reps=1,
-        maxiter=5,
-        lmbda=10.0,
-        lmbda_empty=0.0,
-        optimizer_method="ADAM",   # Corrigido de cobyla para ADAM
-        lr=0.01,                   # LR ajustado para saltos adequados no espaço de fase
-        graph_type="random",
-        device="cpu",
-        seed=42,
-        save_outputs=True,
-        variable_type_path="QUMODES"
-    )
-    # vehicle = [1, 2, 3, 4]
-    # layer = [1, 2, 3,]
-    # reps = [1, 2, 3]
-    # for comb in product(vehicle, layer, reps):
-    # for g_type in ["euclidean", "circle", "grid", "clustered"]:
+    vehicles = [1,2]
+    l_params = [None, 10,50,75,100]
+    for comb in list(product(vehicles,l_params)):
+        vehicle, l_param = comb
+        run(
+            n_cities=5,
+            num_vehicles=vehicle,
+            layers=2,
+            maxiter=5,
+            lmbda=l_param,
+            # lmbda_empty=0.0,
+            optimizer_method="ADAM",   # Corrigido de cobyla para ADAM
+            lr=0.01,                   # LR ajustado para saltos adequados no espaço de fase
+            graph_type="random",
+            device="cuda",
+            seed=42,
+            save_outputs=True,
+            variable_type_path="QUMODES",
+            sub_folder="PENALIZATION"
+        )
+
+    # city = [3]#3,4,5]
+    # vehicles = [1,2]#,3]
+    # layers = [2]#1,3]
+    # for comb in product(city, vehicles, layers):
+    #     city, vehicle, layer = comb
+    #     run(
+    #         n_cities=city,
+    #         num_vehicles=vehicle,
+    #         layers=layer,
+    #         maxiter=5,
+    #         # lmbda=10.0,
+    #         # lmbda_empty=0.0,
+    #         optimizer_method="ADAM",   # Corrigido de cobyla para ADAM
+    #         lr=0.01,                   # LR ajustado para saltos adequados no espaço de fase
+    #         graph_type="random",
+    #         device="cuda",
+    #         seed=42,
+    #         save_outputs=True,
+    #         variable_type_path="QUMODES-TEST"
+    #     )
+
+    # vehicles = [1,3]
+    # graph_type = ["euclidean", "circle", "grid", "clustered"]
+    # for comb in list(product(vehicles, graph_type)):
+    #     vehicle, g_type = comb
     #     run(
     #         n_cities=5,
-    #         num_vehicles=3,
+    #         num_vehicles=vehicle,
     #         layers=2,
-    #         reps=1,
     #         maxiter=500,
     #         lmbda=10.0,
     #         lmbda_empty=0.0,

@@ -29,7 +29,8 @@ class GraphBuilder:
         coords: Optional[Union[np.ndarray, List[Tuple[float, float]]]] = None,
         matrix: Optional[Union[np.ndarray, List[List[float]]]] = None,
         logger: Optional[ExperimentLogger] = None,
-        variable_type_path: str = "QUMODES"
+        variable_type_path: str = "QUMODES",
+        sub_folder: Union[str, None] = None
     ):
         self.seed = seed
         self.logger = logger if logger is not None else ExperimentLogger()
@@ -146,8 +147,12 @@ class GraphBuilder:
 
         return valid_route[:self.n]
 
-    def plot_original_graph(self, prefix: str = "graph", problem_type: str = "TSP") -> Path:
-        out_dir = Path(self.logger.get_figures_dir(self.variable_type_path, problem_type))
+    def plot_original_graph(self, 
+        prefix: str = "graph", 
+        problem_type: str = "TSP",
+        sub_folder: Union[str, None] = None) -> Path:
+        out_dir = Path(self.logger.get_figures_dir(variable_type=self.variable_type_path, problem_type=problem_type, sub_folder=sub_folder))
+
 
         G = nx.Graph()
         for i in range(self.n):
@@ -177,7 +182,7 @@ class GraphBuilder:
         return orig_path
 
     def plot_tsp_route(self, solution_vector: Union[List, tuple, np.ndarray], prefix: str = "tsp") -> Path:
-        out_dir = Path(self.logger.get_figures_dir(variable_type=self.variable_type_path, problem_type="TSP"))
+        out_dir = Path(self.logger.get_figures_dir(variable_type=self.variable_type_path, problem_type="TSP", sub_folder=sub))
 
         # Converte e sanitiza a rota para garantir nós válidos
         route = self._convert_vector_to_route(solution_vector)
@@ -284,7 +289,10 @@ class GraphBuilder:
 
         return vrp_path
 
-    def plot_graph_and_route(self, solution_vector = None, prefix: str = "graph") -> Tuple[Path, Union[Path, None]]:
+    def plot_graph_and_route(self, 
+        solution_vector = None, 
+        prefix: str = "graph") -> Tuple[Path, Union[Path, None]]:
+        
         prob_type = "VRP" if isinstance(solution_vector, dict) else "TSP"
         orig_path = self.plot_original_graph(prefix=prefix, problem_type=prob_type)
         route_path = None

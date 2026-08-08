@@ -148,3 +148,55 @@ Sua implementação no `solver.py` é a **forma padrão e ideal de se fazer pesq
 
 1. Ela evita o ruído estatístico de amostragem no loop do otimizador clássico (COBYLA), permitindo que ele converja muito mais rápido.
 2. Ela aproveita a facilidade do simulador de acessar $\langle \hat{x} \rangle$ e $\langle \hat{p} \rangle$ diretamente do estado analítico sem precisar reconstruir a função de onda ou duplicar as chamadas do circuito no simulador.
+
+---
+
+# Debugging do Groun State Energy
+
+Analisando o arquivo `vrp/solver.py`, o parâmetro **`ground_state_energy` (ou `exact_cost`) não é calculado dentro deste arquivo**.
+
+O `solver.py` apenas calcula duas métricas durante o processo:
+
+1. **`continuous_loss`**: A perda contínua e diferenciável calculada a cada passo de otimização via `self.hamiltonian.compute_continuous_cost_tf(x_tens, p_tens)`.
+
+
+2. **`discrete_cost`**: O custo discreto real da rota decodificada retornado como `best_cost` e `best_energy` ao final do método `solve()`.
+
+
+
+O `ground_state_energy` (custo exato/ótimo do grafo) costuma ser gerado externamente por busca exata (força bruta ou programação linear) no script principal (como `main.py`).
+
+---
+
+## Diagnóstico para o Debugging dos Gráficos
+
+A divergência nos gráficos entre o valor otimizado, o custo discreto e o `ground_state_energy` ocorre pelos dois motivos descritos abaixo:
+
+### 1. Por que o valor otimizado aparece ABAIXO do `exact_cost`?
+
+Isso acontece quando o gráfico compara o **`continuous_loss_history`** com o **`exact_cost`** discreto:
+
+* **Causa:** O `continuous_loss` é uma relaxação contínua que utiliza valores esperados das quadraturas $\langle X \rangle$ e $\langle P \rangle$. Nesse espaço contínuo, funções suaves de distância (como os termos exponenciais $e^{-\Delta x^2}$) permitem que o otimizador Adam obtenha custos fracionários irreais (estados não-físicos onde posições se sobrepõem parcialmente).
+
+
+* **Consequência:** A perda contínua pode cair abaixo da menor distância discreta possível do grafo. Esse valor contínuo abaixo do ótimo é um "artefato da relaxação" e desaparece no momento da discretização (`discretize_quadratures`).
+
+
+
+### 2. Por que a otimização NÃO ALCANÇA o `ground_state_energy` em alguns casos?
+
+Quando o custo discreto estagna em um valor superior ao ótimo exato, o problema está na transição entre o espaço contínuo e a discretização:
+
+* **Armadilhas de Mínimos Locais:** A paisagem de perda contínua criada pelas penalidades de repulsão contêm múltiplos poços potenciais locais. O otimizador Adam pode convergir para uma região onde os gradientes zeram antes de encontrar a bacia de atração do ótimo global.
+* **Arredondamento na Discretização:** Pequenas variações nos valores contínuos de $x$ e $p$ geram arredondamentos abruptos no `discretize_quadratures`. Se duas cidades contínuas próximas forem arredondadas para o mesmo inteiro, a função discreta ativa penalidades de colisão severas ($\lambda = 100$), elevando o custo final desproporcionalmente.
+
+
+
+---
+
+## Como corrigir o código para os testes?
+
+1. **Garantir a mesma métrica na plotagem:** No seu script de plotagem/benchmark, certifique-se de comparar o `exact_cost` contra o **`cost_history`** (custo discreto) em vez do **`continuous_loss_history`**.
+
+
+2. **Normalização do Custo Exato:** Verifique se o cálculo do `exact_cost` exato considera apenas as distâncias da matriz $d_{ij}$ ou se inclui as penalidades $\lambda$. Para comparar corretamente com a rota válida, o `exact_cost` deve refletir estritamente a soma das distâncias das arestas percorrida no grafo.
