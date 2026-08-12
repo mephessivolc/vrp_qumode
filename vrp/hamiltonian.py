@@ -1,4 +1,3 @@
-# vrp/hamiltonian.py
 import tensorflow as tf
 import numpy as np
 from typing import Tuple, List, Dict, Union
@@ -8,26 +7,48 @@ class Hamiltonian:
         self, 
         dist_matrix: np.ndarray, 
         num_vehicles: int = 2, 
+        vehicle_capacity: Union[float, int, List[float], np.ndarray] = 10.0,
+        demands: Union[List[float], np.ndarray, None] = None,
         lmbda: Union[float, None] = None,
-        lmbda_empty: Union[float, None] = None,
+        lmbda_cap: Union[float, None] = None,
     ):
         self.dist_matrix = np.array(dist_matrix, dtype=np.float32)
         self.num_nodes = len(dist_matrix)
         self.num_vehicles = num_vehicles
         self.num_free_cities = self.num_nodes - 1
+        
+        # 1. Configuração de Demandas das Cidades
+        if demands is None:
+            # Caso não sejam informadas, assume demanda unitária (1.0) para cada cidade livre e 0 para o depósito
+            self.demands = np.ones(self.num_nodes, dtype=np.float32)
+            self.demands[0] = 0.0
+        else:
+            self.demands = np.array(demands, dtype=np.float32)
+            if len(self.demands) != self.num_nodes:
+                raise ValueError(f"O tamanho do vetor de demandas ({len(self.demands)}) deve ser igual a N ({self.num_nodes}).")
+
+        # 2. Configuração de Capacidade dos Veículos (Homogênea ou Heterogênea)
+        if isinstance(vehicle_capacity, (float, int)):
+            self.capacities = np.full(self.num_vehicles, float(vehicle_capacity), dtype=np.float32)
+        else:
+            self.capacities = np.array(vehicle_capacity, dtype=np.float32)
+            if len(self.capacities) != self.num_vehicles:
+                raise ValueError(f"O vetor de capacidades ({len(self.capacities)}) deve ter tamanho igual a num_vehicles ({self.num_vehicles}).")
+
+        # 3. Multiplicadores de Penalidade (Lagrange / Penalidade de Restrição)
         if lmbda is not None:
             if not isinstance(lmbda, (float, int)):
-                raise TypeError("This 'lmbda' variable must be a float.")
+                raise TypeError("O parâmetro 'lmbda' deve ser um número float ou int.")
             self.lmbda = float(lmbda)
         else:
-            self.lmbda = self.num_nodes * np.max(self.dist_matrix)
+            self.lmbda = float(self.num_nodes * np.max(self.dist_matrix))
         
-        if lmbda_empty is not None:
-            if not isinstance(lmbda_empty, (float, int)):
-                raise TypeError("This 'lmbda_empty' variable must be a float.")
-            self.lmbda_empty = float(lmbda_empty)
+        if lmbda_cap is not None:
+            if not isinstance(lmbda_cap, (float, int)):
+                raise TypeError("O parâmetro 'lmbda_cap' deve ser um número float ou int.")
+            self.lmbda_cap = float(lmbda_cap)
         else:
-            self.lmbda_empty = self.lmbda
+            self.lmbda_cap = self.lmbda
 
         self.max_steps = self.num_free_cities
 
@@ -41,7 +62,6 @@ class Hamiltonian:
             tf.square(tf.maximum(0.0, x_tens - float(self.max_steps)))
         )
         
-        # No TSP, p é trivial/fixado em 1.0, mas mantemos o limite por consistência
         out_p = tf.reduce_sum(
             tf.square(tf.maximum(0.0, 1.0 - p_tens)) + 
             tf.square(tf.maximum(0.0, p_tens - float(self.num_vehicles)))
@@ -52,43 +72,48 @@ class Hamiltonian:
         for i in range(self.num_free_cities):
             for j in range(i + 1, self.num_free_cities):
                 if self.is_tsp:
-                    # TSP: Apenas a posição temporal x importa para a colisão
                     dist_sq = tf.square(x_tens[i] - x_tens[j])
                 else:
-                    # VRP: Considera posição x e veículo p
                     dist_sq = tf.square(p_tens[i] - p_tens[j]) + tf.square(x_tens[i] - x_tens[j])
                 
                 col_penalty += 1.0 / (dist_sq + 0.1)
 
-        # 3. Penalidade por Veículo Vazio (Aplicada APENAS para VRP)
-        empty_penalty = 0.0
-        if not self.is_tsp:
-            for v in range(1, self.num_vehicles + 1):
-                cov = tf.reduce_sum(tf.exp(-tf.square(p_tens - float(v))))
-                empty_penalty += tf.exp(-1.5 * cov)
+        # 3. Penalidade de Capacidade (Substitui a antiga penalidade de veículo vazio)
+        capacity_penalty = 0.0
+        free_demands = tf.constant(self.demands[1:], dtype=tf.float32)  # Cidades livres 1..N-1
+        
+        for v_idx in range(self.num_vehicles):
+            v_num = float(v_idx + 1)
+            # Ponderação suave de pertencimento da cidade livre ao veículo v
+            weights = tf.exp(-tf.square(p_tens - v_num)) if not self.is_tsp else tf.ones_like(p_tens)
+            
+            # Carga estimada no veículo v
+            load_v = tf.reduce_sum(free_demands * weights)
+            cap_v = float(self.capacities[v_idx])
+            
+            # Penalidade quadrática para sobrecarga (L_v > C_v)
+            overcapacity = tf.maximum(0.0, load_v - cap_v)
+            capacity_penalty += tf.square(overcapacity)
 
         # 4. Aproximação Suave da Distância (Soft Distance)
         soft_dist_cost = 0.0
         for i in range(self.num_free_cities):
             for j in range(i + 1, self.num_free_cities):
                 if self.is_tsp:
-                    # TSP: Todas as cidades estão garantidamente no mesmo veículo
                     same_vehicle_prob = 1.0
                 else:
-                    # VRP: Probabilidade de estarem no mesmo veículo v
                     same_vehicle_prob = tf.exp(-tf.square(p_tens[i] - p_tens[j]))
 
-                # Probabilidade diferenciável de serem visitadas em sequência temporal (x consecutivo)
                 adj_step_prob = tf.exp(-tf.square(tf.abs(x_tens[i] - x_tens[j]) - 1.0))
-                
                 d_ij = self.dist_matrix[i + 1, j + 1]
                 soft_dist_cost += d_ij * same_vehicle_prob * adj_step_prob
 
+        cost_capacity_penalty = self.lmbda_cap * capacity_penalty if not self.is_tsp else 0.0
         # Custo Total Diferenciável
         total_loss = (
             10.0 * (out_x + out_p) 
             + self.lmbda * col_penalty 
-            + (self.lmbda_empty * empty_penalty if not self.is_tsp else 0.0)
+            + cost_capacity_penalty
             + soft_dist_cost
         )
         return total_loss
@@ -112,32 +137,32 @@ class Hamiltonian:
 
     def compute_cost(self, x_vals: List[float], p_vals: List[float]) -> float:
         x_disc, p_disc = self.discretize_quadratures(x_vals, p_vals)
-        cost_dist, penalty_col, penalty_empty = 0.0, 0.0, 0.0
+        cost_dist, penalty_col, penalty_cap = 0.0, 0.0, 0.0
 
-        # Penalidade por Colisão Discreta
+        # 1. Penalidade por Colisão Discreta
         for i in range(self.num_free_cities):
             for j in range(i + 1, self.num_free_cities):
                 if self.is_tsp:
-                    # No TSP, duas cidades não podem ocupar o mesmo passo de tempo x
                     if x_disc[i] == x_disc[j]:
                         penalty_col += self.lmbda
                 else:
-                    # No VRP, duas cidades não podem ocupar o mesmo passo x E o mesmo veículo p
                     if p_disc[i] == p_disc[j] and x_disc[i] == x_disc[j]:
                         penalty_col += self.lmbda
 
-        # Penalidade por Veículo Vazio (Apenas para VRP)
-        if not self.is_tsp:
-            vehicles_used = set(p_disc)
-            for v in range(1, self.num_vehicles + 1):
-                if v not in vehicles_used:
-                    penalty_empty += self.lmbda_empty
+        # 2. Penalidade por Excesso de Capacidade Discreta
+        for v_idx in range(1, self.num_vehicles + 1):
+            assigned_cities = [i + 1 for i in range(self.num_free_cities) if p_disc[i] == v_idx]
+            load_v = sum(self.demands[city] for city in assigned_cities)
+            cap_v = self.capacities[v_idx - 1]
+            
+            if load_v > cap_v:
+                penalty_cap += self.lmbda_cap * ((load_v - cap_v) ** 2)
 
-        # Custo Real das Distâncias das Rotas
+        # 3. Custo Real das Distâncias das Rotas
         routes = self.decode_routes(x_vals, p_vals)
         for v, route in routes.items():
             if route != [0, 0]:
                 for k in range(len(route) - 1):
                     cost_dist += self.dist_matrix[route[k], route[k + 1]]
 
-        return float(cost_dist + penalty_col + penalty_empty)
+        return float(cost_dist + penalty_col + penalty_cap)

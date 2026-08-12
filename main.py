@@ -1,7 +1,7 @@
 # vrp/main.py
 import sys
 from pathlib import Path
-from typing import Union
+from typing import Union, List, Tuple, Optional, Dict, Any
 
 # --- RESOLUÇÃO DE IMPORTS ---
 SRC_DIR = Path(__file__).resolve().parent.parent
@@ -68,11 +68,14 @@ def plot_phase_space(
 def run(
     n_cities: int = 3,
     num_vehicles: int = 2,
+    vehicle_capacity: Union[float, int, List[float], np.ndarray] = 10.0,
+    demands: Optional[Union[np.ndarray, List[float]]] = None,
+    demand_range: Tuple[float, float] = (1.0, 5.0),
     layers: int = 1,
     reps: int = 1,
     maxiter: int = 500,
-    lmbda: float = 100.0,
-    lmbda_empty: float = 150.0,
+    lmbda: Optional[float] = None,
+    lmbda_cap: Optional[float] = None,
     optimizer_method: str = "ADAM",
     lr: float = 0.01,
     graph_type: str = "random", 
@@ -82,51 +85,61 @@ def run(
     variable_type_path: str = "QUMODES",
     sub_folder: Union[str, None] = None
 ) -> dict:
-    """Orquestrador principal para simulações e experimentos do VRP em CV-VQE."""
+    """Orquestrador principal para simulações e experimentos do CVRP em CV-VQE."""
     str_problem_type = "TSP" if num_vehicles == 1 else "VRP"
     logger = ExperimentLogger(
         variable_type=variable_type_path, 
         problem_type=str_problem_type,
         sub_folder=sub_folder
-        )
+    )
     logger.info(
-        f"Iniciando Experimento {variable_type_path} {str_problem_type} (N={n_cities}, Vehicles={num_vehicles}, Layers={layers}, "
-        f"Reps={reps}, Opt={optimizer_method}, LR={lr}, Device={device.upper()}, MaxIter={maxiter})"
+        f"Iniciando Experimento {variable_type_path} {str_problem_type} (N={n_cities}, Vehicles={num_vehicles}, "
+        f"Cap={vehicle_capacity}, Layers={layers}, Reps={reps}, Opt={optimizer_method}, LR={lr}, Device={device.upper()}, MaxIter={maxiter})"
     )
 
+    cap_info = vehicle_capacity if isinstance(vehicle_capacity, (int, float)) else "het"
     constructor_info_name = (
-        f"N{n_cities}_V{num_vehicles}_L{layers}_R{reps}_O{optimizer_method.lower()}_LR={lr}_M{maxiter}_G{graph_type.lower()}"
+        f"N{n_cities}_V{num_vehicles}_C{cap_info}_L{layers}_R{reps}_O{optimizer_method.lower()}_LR={lr}_M{maxiter}_G{graph_type.lower()}"
     )
 
-    # 1. GERAÇÃO DO GRAFO (Inclui Depósito no índice 0)
-    logger.info("1. Gerando matriz de adjacência do grafo (Depósito + Cidades)...")
+    # 1. GERAÇÃO DO GRAFO E DEMANDAS (Inclui Depósito no índice 0)
+    logger.info("1. Gerando grafo e demandas das cidades (Depósito + Cidades)...")
     total_nodes = n_cities + 1
     gb = GraphBuilder(
         n=total_nodes, 
         seed=seed, 
         graph_type=graph_type, 
+        demands=demands,
+        demand_range=demand_range,
         logger=logger, 
         variable_type_path=variable_type_path,
         sub_folder=sub_folder
-        )
+    )
 
     # 2. GROUND TRUTH (Força Bruta Exata)
-    logger.info("2. Executando Busca Exhaustiva Clássica (Ground Truth)...")
+    logger.info("2. Executando Busca Exaustiva Clássica (Ground Truth)...")
     t0 = time.time()
     solver_exato = BruteForce(gb.matrix, num_vehicles=num_vehicles)
     exact_cost, exact_route = solver_exato.solve()
     t_exact = time.time() - t0
     logger.info(f"   ► Custo Exato: {exact_cost:.4f} | Tempo: {format_timespan(t_exact)}")
 
-    # 3. HAMILTONIANO
-    logger.info("3. Construindo operadores do Hamiltoniano CV...")
-    hamiltonian = Hamiltonian(gb.matrix, num_vehicles=num_vehicles, lmbda=lmbda, lmbda_empty=lmbda_empty)
+    # 3. HAMILTONIANO DO CVRP (Insere Capacidade e Demandas)
+    logger.info("3. Construindo operadores do Hamiltoniano CV para CVRP...")
+    hamiltonian = Hamiltonian(
+        dist_matrix=gb.matrix, 
+        num_vehicles=num_vehicles, 
+        vehicle_capacity=vehicle_capacity,
+        demands=gb.demands,
+        lmbda=lmbda, 
+        lmbda_cap=lmbda_cap
+    )
     vqe_solver = Solver(
-            hamiltonian=hamiltonian,
-            layers=layers,
-            reps=reps,
-            device=device
-        )
+        hamiltonian=hamiltonian,
+        layers=layers,
+        reps=reps,
+        device=device
+    )
 
     # 4. SOLVER VQE
     logger.info(f"4. Otimizando circuito VQE ({optimizer_method} | lr={lr} | device={device.upper()})...")
@@ -152,23 +165,26 @@ def run(
     routes = vqe_res["routes"]
 
     print("\n" + "="*70)
-    print(f"                     RESULTADOS FINAIS DO {str_problem_type}                     ")
+    print(f"                     RESULTADOS FINAIS DO {str_problem_type} (CVRP)                     ")
     print("="*70)
     print(f"Custo Exato (Ground Truth): {exact_cost:.4f}")
     print(f"Custo Otimizado (CV-VQE)  : {vqe_cost:.4f}")
     print(f"Razão de Aproximação       : {approx_ratio:.4f}")
+    print(f"Demandas das Cidades      : {gb.demands.tolist()}")
+    print(f"Capacidades dos Veículos  : {hamiltonian.capacities.tolist()}")
     print("-" * 70)
     print("Medições das Quadraturas no Espaço de Fase:")
     for i in range(n_cities):
         city_id = i + 1
-        print(f"  • Cidade {city_id} -> "
+        print(f"  • Cidade {city_id} (Demanda={gb.demands[city_id]}) -> "
               f"x_cont: {cont_x[i]:6.3f} | p_cont: {cont_p[i]:6.3f}  ===>  "
               f"Passo Temporal (x): {disc_x[i]} | Veículo (p): {disc_p[i]}")
     print("-" * 70)
     print("Decodificação Discreta das Rotas dos Veículos:")
     for veh, r in routes.items():
         route_str = " -> ".join(map(str, r))
-        print(f"  • Veículo {veh}: {route_str}")
+        v_load = sum(gb.demands[node] for node in r)
+        print(f"  • Veículo {veh} (Carga={v_load:.1f}/{hamiltonian.capacities[veh-1]}): {route_str}")
     print("="*70 + "\n")
 
     # 6. ESTRUTURAÇÃO DOS RESULTADOS E ARTEFATOS
@@ -187,11 +203,13 @@ def run(
         seed=seed,
         n_cities=n_cities,
         num_vehicles=num_vehicles,
+        vehicle_capacity=hamiltonian.capacities.tolist(),  # Lista com as capacidades dos veículos
+        demands=gb.demands.tolist(),                        # Lista com as demandas das cidades
         p_layers=layers,
         max_iter=maxiter,
         momentum_mass=1.0,
-        lmbda=lmbda,
-        lmbda_empty=lmbda_empty,
+        lmbda=hamiltonian.lmbda,
+        lmbda_cap=hamiltonian.lmbda_cap,
         exact_cost=exact_cost,
         exact_route=exact_route,
         exact_time_sec=t_exact,
@@ -222,9 +240,11 @@ def run(
     )
 
     if save_outputs:
-        # figures_dir = Path(logger.get_figures_dir("VRP"))
-        figures_dir = get_images_path(variable_type=variable_type_path,problem_type=str_problem_type.lower(),
-        sub_folder=sub_folder)
+        figures_dir = get_images_path(
+            variable_type=variable_type_path,
+            problem_type=str_problem_type.lower(),
+            sub_folder=sub_folder
+        )
         
         # a) Salva JSON/CSV via Logger
         logger.save_experiment(experiment_res)
@@ -258,7 +278,7 @@ def run(
         lines_2, labels_2 = ax2.get_legend_handles_labels()
         ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper right')
 
-        plt.title(f"Convergência CV-VQE - {str_problem_type} plot_phase_space(N={n_cities}, Veículos={num_vehicles})", fontsize=12)
+        plt.title(f"Convergência CV-VQE - {str_problem_type} (N={n_cities}, Veículos={num_vehicles})", fontsize=12)
         fig.tight_layout()
         plt.savefig(conv_path, dpi=300)
         plt.close()
@@ -288,63 +308,69 @@ if __name__ == "__main__":
 
     from itertools import product
 
-    vehicles = [1,2]
-    l_params = [None, 10,50,75,100]
-    for comb in list(product(vehicles,l_params)):
+    maxiter = 500
+    vehicles = [1,2,3,4]
+    l_params = [None,10,50,75,100]
+    
+    # Bateria de testes de Penalização
+    for comb in list(product(vehicles, l_params)):
         vehicle, l_param = comb
         run(
             n_cities=5,
             num_vehicles=vehicle,
+            vehicle_capacity=10.0,
             layers=2,
-            maxiter=5,
+            maxiter=maxiter,
             lmbda=l_param,
-            # lmbda_empty=0.0,
-            optimizer_method="ADAM",   # Corrigido de cobyla para ADAM
-            lr=0.01,                   # LR ajustado para saltos adequados no espaço de fase
+            lmbda_cap=None,
+            optimizer_method="ADAM",
+            lr=0.01,
             graph_type="random",
             device="cuda",
             seed=42,
             save_outputs=True,
-            variable_type_path="QUMODES",
             sub_folder="PENALIZATION"
         )
+        
 
-    # city = [3]#3,4,5]
-    # vehicles = [1,2]#,3]
-    # layers = [2]#1,3]
-    # for comb in product(city, vehicles, layers):
-    #     city, vehicle, layer = comb
-    #     run(
-    #         n_cities=city,
-    #         num_vehicles=vehicle,
-    #         layers=layer,
-    #         maxiter=5,
-    #         # lmbda=10.0,
-    #         # lmbda_empty=0.0,
-    #         optimizer_method="ADAM",   # Corrigido de cobyla para ADAM
-    #         lr=0.01,                   # LR ajustado para saltos adequados no espaço de fase
-    #         graph_type="random",
-    #         device="cuda",
-    #         seed=42,
-    #         save_outputs=True,
-    #         variable_type_path="QUMODES-TEST"
-    #     )
+    # Bateria de testes Principais (Tamanho da Cidade, Veículos, Camadas)
+    city = [3, 4, 5]
+    vehicles = [1, 2, 3]
+    layers = [2, 1, 3]
+    for comb in product(city, vehicles, layers):
+        c, v, l = comb
+        run(
+            n_cities=c,
+            num_vehicles=v,
+            vehicle_capacity=8.0,
+            layers=l,
+            maxiter=maxiter,
+            optimizer_method="ADAM",
+            lr=0.01,
+            graph_type="random",
+            device="cuda",
+            seed=42,
+            save_outputs=True,
+            sub_folder="MAIN"
+        )
 
-    # vehicles = [1,3]
-    # graph_type = ["euclidean", "circle", "grid", "clustered"]
-    # for comb in list(product(vehicles, graph_type)):
-    #     vehicle, g_type = comb
-    #     run(
-    #         n_cities=5,
-    #         num_vehicles=vehicle,
-    #         layers=2,
-    #         maxiter=500,
-    #         lmbda=10.0,
-    #         lmbda_empty=0.0,
-    #         optimizer_method="ADAM",   # Corrigido de cobyla para ADAM
-    #         lr=0.01,                   # LR ajustado para saltos adequados no espaço de fase
-    #         graph_type=g_type,
-    #         device="cuda",
-    #         seed=42,
-    #         save_outputs=True
-    #     )
+    # Bateria de testes por Topologia de Grafo
+    vehicles = [1, 3]
+    graph_type = ["euclidean", "circle", "grid", "clustered"]
+    for comb in list(product(vehicles, graph_type)):
+        v, g_type = comb
+        run(
+            n_cities=5,
+            num_vehicles=v,
+            vehicle_capacity=10.0,
+            layers=2,
+            maxiter=maxiter,
+            lmbda=10.0,
+            optimizer_method="ADAM",
+            lr=0.01,
+            graph_type=g_type,
+            device="cuda",
+            seed=42,
+            save_outputs=True,
+            sub_folder="MAIN"
+        )

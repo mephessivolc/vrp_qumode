@@ -3,8 +3,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        - BASE_IMAGE=tensorflow/tensorflow:2.15.0-gpu
     # Mapeia para usar o seu usuário atual do servidor (ex: 1000:1000)
     user: "${UID:-1025}:${GID:-1025}"
     volumes:
-      - .:/workspace
+      - .:/workspace:cached
+      - /home-ext/clovis:/home-ext/clovis
     command: python main.py
+    # 1. Evita que o TensorFlow aloque toda a VRAM de uma vez
+    environment:
+      - TF_FORCE_GPU_ALLOW_GROWTH=true

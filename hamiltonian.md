@@ -200,3 +200,81 @@ Quando o custo discreto estagna em um valor superior ao ótimo exato, o problema
 
 
 2. **Normalização do Custo Exato:** Verifique se o cálculo do `exact_cost` exato considera apenas as distâncias da matriz $d_{ij}$ ou se inclui as penalidades $\lambda$. Para comparar corretamente com a rota válida, o `exact_cost` deve refletir estritamente a soma das distâncias das arestas percorrida no grafo.
+
+---
+---
+# Modelagem para o hamiltoniano do VRP e TSP
+
+O modelo matematico do Hamiltoniano para o **CVRP** (e **TSP**) em VQE de Variáveis Contínuas (CV-VQE) mapeia as variáveis discretas de roteamento em observáveis quânticos contínuos (quadraturas de Posição $\hat{x}$ e Momento $\hat{p}$) medidos em cada qumode (cidade $i \in \{1, \dots, N\}$).
+
+
+## 1. Mapeamento do Espaço de Fase Quântico
+
+Cada cidade $i$ é associada a um qumode cuja medição fornece o par de quadraturas $(x_i, p_i)$:
+
+* **Posição ($x_i$):** Representa continuous/soft a **ordem de visitação/passo temporal** da cidade no circuito.
+* **Momento ($p_i$):** Representa continuous/soft o **veículo atribuído** à cidade $i$, onde $p_i \in [1, K]$ para $K$ veículos.
+
+
+
+## 2. Formulação Geral do Hamiltoniano Total
+
+A função de perda diferenciável (Hamiltoniano efetivo) otimizada pelo VQE é composta pela soma do custo contínuo de distância e dos termos de penalização:
+
+$$H_{\text{total}} = H_{\text{dist}} + \lambda \cdot H_{\text{col}} + H_{\text{cap}} + H_{\text{bound}}$$
+
+
+
+## 3. Relações Matemáticas das Penalizações
+
+### A. Penalidade de Colisão Temporal / Posição ($H_{\text{col}}$)
+
+Impede que duas cidades distintas $i \neq j$ ocupem o mesmo passo temporal dentro da rota do mesmo veículo. A sobreposição é aproximada continuamente via curvas Gaussianas no espaço de fase:
+
+$$H_{\text{col}} = \sum_{i=1}^{N} \sum_{j \neq i}^{N} \exp\left(-\frac{(x_i - x_j)^2}{2\sigma_x^2}\right) \cdot \exp\left(-\frac{(p_i - p_j)^2}{2\sigma_p^2}\right)$$
+
+* **$\exp\left(-\frac{(x_i - x_j)^2}{2\sigma_x^2}\right)$:** Penaliza cidades com ordens temporais $x_i \approx x_j$ idênticas.
+* **$\exp\left(-\frac{(p_i - p_j)^2}{2\sigma_p^2}\right)$:** Garante que a penalidade de ordem só seja aplicada fortemente se as cidades pertencerem ao mesmo veículo ($p_i \approx p_j$).
+
+### B. Penalidade de Capacidade de Veículo ($H_{\text{cap}}$)
+
+Garante que a soma das demandas $q_i$ atribuídas ao veículo $v$ não ultrapasse sua capacidade máxima $C_v$.
+
+1. **Estimativa de Carga Contínua do Veículo $v$ ($L_v$):**
+Mede a carga total associada suavemente ao veículo $v \in \{1, \dots, K\}$ através do grau de pertinência Gaussiano de cada cidade ao veículo:
+
+$$L_v = \sum_{i=1}^{N} q_i \cdot \exp\left(-\frac{(p_i - v)^2}{2\sigma_p^2}\right)$$
+
+
+2. **Excesso de Capacidade ($\text{Overcapacity}_v$):**
+Computa a violação utilizando a função ReLU/Maximum suave:
+
+$$\text{Overcapacity}_v = \max(0, L_v - C_v)$$
+
+
+3. **Termo de Penalização:**
+
+$$H_{\text{cap}} = \begin{cases} \lambda_{\text{cap}} \displaystyle\sum_{v=1}^{K} \left[\max(0, L_v - C_v)\right]^2, & \text{se } \text{CVRP } (K > 1) \\ 0.0, & \text{se } \text{TSP } (K = 1) \end{cases}$$
+
+
+### C. Penalidade de Confinamento / Limites de Domínio ($H_{\text{bound}}$)
+
+Força as expectativas do circuito quântico a permanecerem dentro dos limites físicos válidos do problema ($x_i \in [1, N]$ e $p_i \in [1, K]$):
+
+$$H_{\text{bound}} = \alpha \sum_{i=1}^{N} \left[ \max(0, 1 - x_i)^2 + \max(0, x_i - N)^2 + \max(0, 1 - p_i)^2 + \max(0, p_i - K)^2 \right]$$
+
+Onde $\alpha$ é uma constante de confinamento (e.g., $\alpha = 10.0$).
+
+### D. Custo Suave de Distância ($H_{\text{dist}}$)
+
+Estima a distância total percorrida conectando sequencialmente os vértices ordenados $x_i \to x_j$ para cidades associadas ao mesmo veículo $p_i \approx p_j \approx v$:
+
+$$H_{\text{dist}} = \sum_{v=1}^{K} \sum_{i=1}^{N} \sum_{j \neq i}^{N} d_{ij} \cdot \exp\left(-\frac{(x_j - x_i - 1)^2}{2\sigma_x^2}\right) \cdot \exp\left(-\frac{(p_i - v)^2 + (p_j - v)^2}{2\sigma_p^2}\right)$$
+
+## Resumo dos Multiplicadores e Comportamento
+
+| Termo | Função no Otimizador | Escala Sugerida |
+| --- | --- | --- |
+| $\lambda$ ($H_{\text{col}}$) | Evita sobreposição de passos temporais entre cidades no mesmo veículo. | $100.0 - 500.0$ |
+| $\lambda_{\text{cap}}$ ($H_{\text{cap}}$) | Evita sobrecarga de veículos ($L_v > C_v$). Zera automaticamente em TSPs. | $500.0 - 1000.0$ |
+| $\alpha$ ($H_{\text{bound}}$) | Impede divergência do circuito para regiões fora de $[1, N] \times [1, K]$. | $10.0$ |

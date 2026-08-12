@@ -12,14 +12,13 @@ from logger import ExperimentLogger
 
 class GraphBuilder:
     """
-    Construtor e visualizador de grafos para problemas de otimização de rotas (TSP e VRP).
+    Construtor e visualizador de grafos para problemas de otimização de rotas (TSP, VRP e CVRP).
     
     Permite inicialização por:
       1. Geradores Automáticos via `graph_type` ("euclidean", "circle", "grid", "clustered", "random")
       2. Coordenadas Espaciais 2D/3D (`coords=[(x1,y1), ...]`)
       3. Matriz de distâncias pronta (`matrix=[...]`)
-    
-    Todos os parâmetros são opcionais com padrões seguros para simulações VQE.
+      4. Atribuição de demandas de carga para CVRP (`demands=[q0, q1, ...]`)
     """
     def __init__(
         self, 
@@ -28,6 +27,8 @@ class GraphBuilder:
         graph_type: str = "random",
         coords: Optional[Union[np.ndarray, List[Tuple[float, float]]]] = None,
         matrix: Optional[Union[np.ndarray, List[List[float]]]] = None,
+        demands: Optional[Union[np.ndarray, List[float]]] = None,
+        demand_range: Tuple[float, float] = (1.0, 5.0),
         logger: Optional[ExperimentLogger] = None,
         variable_type_path: str = "QUMODES",
         sub_folder: Union[str, None] = None
@@ -37,9 +38,10 @@ class GraphBuilder:
         self.graph_type = graph_type
         self.coords = None
         self.variable_type_path = variable_type_path
+        self.sub_folder = sub_folder
 
+        # 1. Definir Matriz e N
         if matrix is not None:
-            # 1. Modo Matriz Direta
             self.matrix = np.array(matrix, dtype=np.float32)
             if self.matrix.ndim != 2 or self.matrix.shape[0] != self.matrix.shape[1]:
                 raise ValueError("A matriz de distâncias deve ser quadrada (N x N).")
@@ -49,7 +51,6 @@ class GraphBuilder:
             self.n = matrix_n
 
         elif coords is not None:
-            # 2. Modo Coordenadas 2D/3D
             self.coords = np.array(coords, dtype=np.float32)
             coords_n = self.coords.shape[0]
             if n is not None and n != coords_n:
@@ -58,9 +59,21 @@ class GraphBuilder:
             self.matrix = self._build_matrix_from_coords(self.coords)
 
         else:
-            # 3. Modo Gerador de Topologias por Tipo (Padrão)
             self.n = n if n is not None else 3
             self.matrix = self._generate_matrix_by_type()
+
+        # 2. Configurar Demandas dos Vértices para CVRP
+        if demands is not None:
+            self.demands = np.array(demands, dtype=np.float32)
+            if len(self.demands) != self.n:
+                raise ValueError(f"O vetor de demandas ({len(self.demands)}) deve ter o mesmo tamanho N={self.n}.")
+            self.demands[0] = 0.0  # Garante demanda nula para o Depósito
+        else:
+            np.random.seed(self.seed)
+            gen_demands = np.random.uniform(demand_range[0], demand_range[1], size=self.n)
+            gen_demands = np.round(gen_demands, 1)
+            gen_demands[0] = 0.0  # Depósito (Nó 0)
+            self.demands = gen_demands.astype(np.float32)
 
     def _build_matrix_from_coords(self, coords: np.ndarray) -> np.ndarray:
         """Calcula matriz de distâncias euclidianas a partir de coordenadas 2D/3D."""
@@ -73,18 +86,15 @@ class GraphBuilder:
         np.random.seed(self.seed)
 
         if self.graph_type == "euclidean":
-            # Cidades espalhadas aleatoriamente num plano 2D [0, 100] x [0, 100] (Estilo TSPLIB)
             self.coords = np.random.uniform(10, 90, size=(self.n, 2))
             return self._build_matrix_from_coords(self.coords)
 
         elif self.graph_type == "circle":
-            # Cidades dispostas num círculo regular (Polígono regular)
             angles = np.linspace(0, 2 * np.pi, self.n, endpoint=False)
             self.coords = np.column_stack((50 + 35 * np.cos(angles), 50 + 35 * np.sin(angles)))
             return self._build_matrix_from_coords(self.coords)
 
         elif self.graph_type == "grid":
-            # Cidades dispostas em uma grade (Grid 2D)
             side = int(np.ceil(np.sqrt(self.n)))
             grid_points = []
             for i in range(self.n):
@@ -95,7 +105,6 @@ class GraphBuilder:
             return self._build_matrix_from_coords(self.coords)
 
         elif self.graph_type == "clustered":
-            # Cidades organizadas em agrupamentos (Clusters geográficos)
             num_clusters = max(2, self.n // 2)
             centers = np.random.uniform(20, 80, size=(num_clusters, 2))
             cluster_pts = []
@@ -107,7 +116,6 @@ class GraphBuilder:
             return self._build_matrix_from_coords(self.coords)
 
         else:
-            # "random": Matriz de adjacência simétrica direta (Modo legado)
             adj = np.random.uniform(1.0, 10.0, size=(self.n, self.n))
             adj = (adj + adj.T) / 2.0
             np.fill_diagonal(adj, 0.0)
@@ -147,12 +155,30 @@ class GraphBuilder:
 
         return valid_route[:self.n]
 
-    def plot_original_graph(self, 
-        prefix: str = "graph", 
-        problem_type: str = "TSP",
-        sub_folder: Union[str, None] = None) -> Path:
-        out_dir = Path(self.logger.get_figures_dir(variable_type=self.variable_type_path, problem_type=problem_type, sub_folder=sub_folder))
+    def _get_node_labels(self) -> Dict[int, str]:
+        """Gera rótulos com ID do nó e sua respectiva demanda."""
+        labels = {}
+        for i in range(self.n):
+            if i == 0:
+                labels[i] = "0\n(Depot)"
+            else:
+                q = self.demands[i]
+                q_str = f"{int(q)}" if q.is_integer() else f"{q:.1f}"
+                labels[i] = f"{i}\n(q={q_str})"
+        return labels
 
+    def plot_original_graph(
+        self, 
+        prefix: str = "graph", 
+        problem_type: str = "VRP",
+        sub_folder: Union[str, None] = None
+    ) -> Path:
+        s_folder = sub_folder if sub_folder is not None else self.sub_folder
+        out_dir = Path(self.logger.get_figures_dir(
+            variable_type=self.variable_type_path, 
+            problem_type=problem_type, 
+            sub_folder=s_folder
+        ))
 
         G = nx.Graph()
         for i in range(self.n):
@@ -165,14 +191,14 @@ class GraphBuilder:
         plt.figure(figsize=(7, 6))
         node_colors = ['gold' if node == 0 else 'lightblue' for node in G.nodes()]
         
-        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=700)
-        nx.draw_networkx_labels(G, pos, font_size=12, font_weight='bold')
+        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=900)
+        nx.draw_networkx_labels(G, pos, labels=self._get_node_labels(), font_size=9, font_weight='bold')
         nx.draw_networkx_edges(G, pos, edge_color='gray', width=1.5, alpha=0.7)
 
         labels = nx.get_edge_attributes(G, 'weight')
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=labels, font_size=10)
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=labels, font_size=9)
 
-        plt.title(f"Grafo Original (N={self.n} | Topologia: {self.graph_type.upper()})", fontsize=12)
+        plt.title(f"Grafo Original CVRP (N={self.n} | Topologia: {self.graph_type.upper()})", fontsize=11)
         plt.axis('off')
 
         orig_path = out_dir / f"{prefix}_original.png"
@@ -181,10 +207,19 @@ class GraphBuilder:
 
         return orig_path
 
-    def plot_tsp_route(self, solution_vector: Union[List, tuple, np.ndarray], prefix: str = "tsp") -> Path:
-        out_dir = Path(self.logger.get_figures_dir(variable_type=self.variable_type_path, problem_type="TSP", sub_folder=sub))
+    def plot_tsp_route(
+        self, 
+        solution_vector: Union[List, tuple, np.ndarray], 
+        prefix: str = "tsp",
+        sub_folder: Union[str, None] = None
+    ) -> Path:
+        s_folder = sub_folder if sub_folder is not None else self.sub_folder
+        out_dir = Path(self.logger.get_figures_dir(
+            variable_type=self.variable_type_path, 
+            problem_type="TSP", 
+            sub_folder=s_folder
+        ))
 
-        # Converte e sanitiza a rota para garantir nós válidos
         route = self._convert_vector_to_route(solution_vector)
         full_cycle = route + [route[0]]
 
@@ -209,8 +244,8 @@ class GraphBuilder:
         nx.draw_networkx_edges(G_base, pos, edge_color='lightgray', width=1.0, style='dashed', alpha=0.5)
 
         node_colors = ['gold' if node == 0 else 'lightgreen' for node in G_base.nodes()]
-        nx.draw_networkx_nodes(G_base, pos, node_color=node_colors, node_size=750)
-        nx.draw_networkx_labels(G_base, pos, font_size=12, font_weight='bold')
+        nx.draw_networkx_nodes(G_base, pos, node_color=node_colors, node_size=900)
+        nx.draw_networkx_labels(G_base, pos, labels=self._get_node_labels(), font_size=9, font_weight='bold')
 
         nx.draw_networkx_edges(
             G_directed, pos,
@@ -222,9 +257,9 @@ class GraphBuilder:
         )
 
         labels = nx.get_edge_attributes(G_base, 'weight')
-        nx.draw_networkx_edge_labels(G_base, pos, edge_labels=labels, font_size=10)
+        nx.draw_networkx_edge_labels(G_base, pos, edge_labels=labels, font_size=9)
 
-        plt.title(f"Trajeto Destacado do TSP: {' -> '.join(map(str, full_cycle))}", fontsize=11)
+        plt.title(f"Trajeto TSP: {' -> '.join(map(str, full_cycle))}", fontsize=11)
         plt.axis('off')
 
         route_path = out_dir / f"{prefix}_route.png"
@@ -233,8 +268,18 @@ class GraphBuilder:
 
         return route_path
 
-    def plot_vrp_routes(self, routes: Dict[int, List[int]], prefix: str = "vrp") -> Path:
-        out_dir = Path(self.logger.get_figures_dir(variable_type=self.variable_type_path, problem_type="VRP"))
+    def plot_vrp_routes(
+        self, 
+        routes: Dict[int, List[int]], 
+        prefix: str = "vrp",
+        sub_folder: Union[str, None] = None
+    ) -> Path:
+        s_folder = sub_folder if sub_folder is not None else self.sub_folder
+        out_dir = Path(self.logger.get_figures_dir(
+            variable_type=self.variable_type_path, 
+            problem_type="VRP", 
+            sub_folder=s_folder
+        ))
 
         G_base = nx.Graph()
         for i in range(self.n):
@@ -248,13 +293,17 @@ class GraphBuilder:
         nx.draw_networkx_edges(G_base, pos, edge_color='lightgray', width=1.0, style='dashed', alpha=0.4)
 
         node_colors = ['gold' if node == 0 else 'lightblue' for node in G_base.nodes()]
-        nx.draw_networkx_nodes(G_base, pos, node_color=node_colors, node_size=800)
-        nx.draw_networkx_labels(G_base, pos, font_size=12, font_weight='bold')
+        nx.draw_networkx_nodes(G_base, pos, node_color=node_colors, node_size=900)
+        nx.draw_networkx_labels(G_base, pos, labels=self._get_node_labels(), font_size=9, font_weight='bold')
 
         legend_handles = []
         for idx, (v_id, route) in enumerate(routes.items()):
             color = color_palette[(idx) % len(color_palette)]
             sanitized_route = [int(node) % self.n for node in route]
+
+            # Calcula a carga total do veículo para exibir na legenda
+            v_load = sum(self.demands[node] for node in sanitized_route)
+            v_load_str = f"{int(v_load)}" if v_load.is_integer() else f"{v_load:.1f}"
 
             G_v = nx.DiGraph()
             v_edges = []
@@ -274,13 +323,16 @@ class GraphBuilder:
                 connectionstyle=f"arc3,rad={rad}"
             )
             
-            legend_handles.append(plt.Line2D([0], [0], color=color, lw=2.5, label=f"Veículo {v_id}: {sanitized_route}"))
+            legend_handles.append(plt.Line2D(
+                [0], [0], color=color, lw=2.5, 
+                label=f"Veículo {v_id} (Carga={v_load_str}): {sanitized_route}"
+            ))
 
         labels = nx.get_edge_attributes(G_base, 'weight')
-        nx.draw_networkx_edge_labels(G_base, pos, edge_labels=labels, font_size=9)
+        nx.draw_networkx_edge_labels(G_base, pos, edge_labels=labels, font_size=8)
 
-        plt.title(f"Solução VRP Multi-Veículos (N={self.n} Nó Depósito: 0)", fontsize=12)
-        plt.legend(handles=legend_handles, loc='upper left', bbox_to_anchor=(1, 1), fontsize=10)
+        plt.title(f"Solução CVRP Multi-Veículos (N={self.n} | Depósito: 0)", fontsize=12)
+        plt.legend(handles=legend_handles, loc='upper left', bbox_to_anchor=(1, 1), fontsize=9)
         plt.axis('off')
 
         vrp_path = out_dir / f"{prefix}_routes.png"
@@ -289,19 +341,22 @@ class GraphBuilder:
 
         return vrp_path
 
-    def plot_graph_and_route(self, 
+    def plot_graph_and_route(
+        self, 
         solution_vector = None, 
-        prefix: str = "graph") -> Tuple[Path, Union[Path, None]]:
+        prefix: str = "graph",
+        sub_folder: Union[str, None] = None
+    ) -> Tuple[Path, Union[Path, None]]:
         
         prob_type = "VRP" if isinstance(solution_vector, dict) else "TSP"
-        orig_path = self.plot_original_graph(prefix=prefix, problem_type=prob_type)
+        orig_path = self.plot_original_graph(prefix=prefix, problem_type=prob_type, sub_folder=sub_folder)
         route_path = None
 
         if solution_vector is not None:
             if isinstance(solution_vector, dict):
-                route_path = self.plot_vrp_routes(routes=solution_vector, prefix=prefix)
+                route_path = self.plot_vrp_routes(routes=solution_vector, prefix=prefix, sub_folder=sub_folder)
             else:
-                route_path = self.plot_tsp_route(solution_vector=solution_vector, prefix=prefix)
+                route_path = self.plot_tsp_route(solution_vector=solution_vector, prefix=prefix, sub_folder=sub_folder)
 
         return orig_path, route_path
 
