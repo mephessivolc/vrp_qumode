@@ -278,3 +278,35 @@ $$H_{\text{dist}} = \sum_{v=1}^{K} \sum_{i=1}^{N} \sum_{j \neq i}^{N} d_{ij} \cd
 | $\lambda$ ($H_{\text{col}}$) | Evita sobreposição de passos temporais entre cidades no mesmo veículo. | $100.0 - 500.0$ |
 | $\lambda_{\text{cap}}$ ($H_{\text{cap}}$) | Evita sobrecarga de veículos ($L_v > C_v$). Zera automaticamente em TSPs. | $500.0 - 1000.0$ |
 | $\alpha$ ($H_{\text{bound}}$) | Impede divergência do circuito para regiões fora de $[1, N] \times [1, K]$. | $10.0$ |
+
+---
+---
+# Gap de distância
+Com certeza! Essa alteração no **gap de busca** (ou espaçamento/resolução no espaço de fase) é um dos pontos mais críticos quando migramos a formulação quântica do TSP para o **CVRP**.
+
+No TSP, trabalhamos praticamente em uma única dimensão temporal ($x$), pois há apenas 1 veículo ($p \approx 1.0$). Quando passamos para o CVRP, o espaço de fase precisa mapear $K$ veículos distintos, e a definição desse "gap" afeta diretamente a capacidade do otimizador de encontrar soluções viáveis.
+
+---
+
+## O que é o "Gap" no contexto de CV-VQE?
+
+Quando falamos de alteração no gap do modelo quântico de Variáveis Contínuas (CV), geralmente estamos lidando com três conceitos interligados:
+
+### 1. Espaçamento entre Atribuições de Veículos ($\Delta p$)
+
+* **O Problema:** No espaço de fase, o valor de $p_i$ determina a qual veículo a cidade $i$ pertence.
+* **A Melhoria:** Definir um gap discreto claro (ex: $p \in \{1.0, 2.0, \dots, K\}$ com $\Delta p = 1.0$) garante que o otimizador consiga diferenciar com precisão quando uma cidade muda do Veículo 1 para o Veículo 2, sem que estados intermediários gerem ambiguidades.
+
+### 2. Largura de Suavização Gaussiana ($\sigma_p$ e $\sigma_x$)
+
+* **O Problema:** As penalidades de colisão e capacidade usam funções do tipo $\exp\left(-\frac{(p_i - v)^2}{2\sigma_p^2}\right)$.
+* **A Melhoria:** O parâmetro $\sigma_p$ atua como a "largura do gap" de atração contínua.
+* Se $\sigma_p$ for **muito pequeno**, o gradiente desaparece quando a cidade está um pouco distante do inteiro ($p \approx 1.4$).
+* Se $\sigma_p$ for **adequado**, cria-se um "vale" suave que guia o gradiente do otimizador em direção ao veículo correto sem travar em platôs nulos.
+
+
+
+### 3. Janela de Discretização e Arredondamento (*Binning Gap*)
+
+* **O Problema:** Na medição do estado quântico, obtemos valores contínuos como $p_1 = 1.82$ e $x_1 = 2.15$.
+* **A Melhoria:** O gap de discretização estabelece a tolerância para mapear $p_1 \to 2$ (Veículo 2) e $x_1 \to 2$ (Passo temporal 2). Ajustar esse limite evita que cidades sejam atribuídas erroneamente ao veículo errado devido a pequenas flutuações quânticas.

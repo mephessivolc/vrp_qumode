@@ -119,7 +119,13 @@ def run(
     # 2. GROUND TRUTH (Força Bruta Exata)
     logger.info("2. Executando Busca Exaustiva Clássica (Ground Truth)...")
     t0 = time.time()
-    solver_exato = BruteForce(gb.matrix, num_vehicles=num_vehicles)
+    solver_exato = BruteForce(
+            gb.matrix, 
+            num_vehicles=num_vehicles, 
+            capacities=hamiltonian.capacities, 
+            demands=gb.demands
+        )
+    
     exact_cost, exact_route = solver_exato.solve()
     t_exact = time.time() - t0
     logger.info(f"   ► Custo Exato: {exact_cost:.4f} | Tempo: {format_timespan(t_exact)}")
