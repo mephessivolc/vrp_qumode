@@ -122,7 +122,7 @@ def run(
     solver_exato = BruteForce(
             gb.matrix, 
             num_vehicles=num_vehicles, 
-            capacities=hamiltonian.capacities, 
+            capacities=vehicle_capacity, 
             demands=gb.demands
         )
     
@@ -335,7 +335,7 @@ if __name__ == "__main__":
             device="cuda",
             seed=42,
             save_outputs=True,
-            sub_folder="PENALIZATION"
+            sub_folder="PENALIZATION-LAST"
         )
         
 
@@ -357,7 +357,7 @@ if __name__ == "__main__":
             device="cuda",
             seed=42,
             save_outputs=True,
-            sub_folder="MAIN"
+            sub_folder="MAIN-LAST"
         )
 
     # Bateria de testes por Topologia de Grafo
@@ -378,5 +378,5 @@ if __name__ == "__main__":
             device="cuda",
             seed=42,
             save_outputs=True,
-            sub_folder="MAIN"
+            sub_folder="TOPOLOGY-LAST"
         )

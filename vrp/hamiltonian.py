@@ -54,7 +54,7 @@ class Hamiltonian:
 
         # Flag para chavear entre TSP (1 veículo) e VRP (> 1 veículos)
         self.is_tsp = (self.num_vehicles == 1)
-
+    
     def compute_continuous_cost_tf(self, x_tens: tf.Tensor, p_tens: tf.Tensor) -> tf.Tensor:
         # 1. Manter quadraturas dentro do intervalo útil [1, max_steps] e [1, num_vehicles]
         out_x = tf.reduce_sum(

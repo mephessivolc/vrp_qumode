@@ -1,6 +1,6 @@
 # core/brute_force.py
 import itertools
-from typing import Tuple, List, Dict, Union
+from typing import Tuple, List, Dict, Union, Optional
 import numpy as np
 
 
