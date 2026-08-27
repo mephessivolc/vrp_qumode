@@ -338,7 +338,7 @@ if __name__ == "__main__":
             device="cuda",
             seed=42,
             save_outputs=True,
-            sub_folder="MAIN-LAST"
+            sub_folder="MAIN"
         )
     
     # Bateria de testes de Penalização
@@ -359,7 +359,7 @@ if __name__ == "__main__":
             device="cuda",
             seed=42,
             save_outputs=True,
-            sub_folder="PENALIZATION-LAST"
+            sub_folder="PENALIZATION"
         )
         
     # Bateria de testes por Topologia de Grafo
@@ -381,5 +381,5 @@ if __name__ == "__main__":
             device="cuda",
             seed=42,
             save_outputs=True,
-            sub_folder="TOPOLOGY-LAST"
+            sub_folder="TOPOLOGY"
         )
