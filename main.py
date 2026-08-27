@@ -362,6 +362,28 @@ if __name__ == "__main__":
             sub_folder="PENALIZATION"
         )
         
+
+    # Bateria de testes Principais (Tamanho da Cidade, Veículos, Camadas)
+    city = [3]#, 4, 5]
+    vehicles = [1, 2]#, 3]
+    layers = [2]#, 1, 3]
+    for comb in product(city, vehicles, layers):
+        c, v, l = comb
+        run(
+            n_cities=c,
+            num_vehicles=v,
+            vehicle_capacity=8.0,
+            layers=l,
+            maxiter=maxiter,
+            optimizer_method="ADAM",
+            lr=0.01,
+            graph_type="random",
+            device="cuda",
+            seed=42,
+            save_outputs=True,
+            sub_folder="MAIN"
+        )
+
     # Bateria de testes por Topologia de Grafo
     vehicles = [1, 3]
     graph_type = ["euclidean", "circle", "grid", "clustered"]
@@ -371,7 +393,6 @@ if __name__ == "__main__":
             n_cities=5,
             num_vehicles=v,
             vehicle_capacity=10.0,
-            demand_range=demand_range,
             layers=2,
             maxiter=maxiter,
             lmbda=10.0,
@@ -381,5 +402,5 @@ if __name__ == "__main__":
             device="cuda",
             seed=42,
             save_outputs=True,
-            sub_folder="TOPOLOGY"
+            sub_folder="MAIN"
         )

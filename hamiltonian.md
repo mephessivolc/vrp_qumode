@@ -310,3 +310,55 @@ Quando falamos de alteração no gap do modelo quântico de Variáveis Contínua
 
 * **O Problema:** Na medição do estado quântico, obtemos valores contínuos como $p_1 = 1.82$ e $x_1 = 2.15$.
 * **A Melhoria:** O gap de discretização estabelece a tolerância para mapear $p_1 \to 2$ (Veículo 2) e $x_1 \to 2$ (Passo temporal 2). Ajustar esse limite evita que cidades sejam atribuídas erroneamente ao veículo errado devido a pequenas flutuações quânticas.
+
+
+---
+# Condições no algoritom para evitar Degenerecencia Espúria 
+
+A implementação das condições de contorno e a auditoria de semelhança do modelo CV-VQE estão mapeadas nos arquivos do projeto.
+
+**Mapeamento das Condições de Contorno no Código**
+
+* **Confinamento de Domínio ($H_{\text{bound}}$):**
+Implementado em `vrp/hamiltonian.py` no método `compute_continuous_cost_tf`. Penaliza quadraticamente extravasamentos de $x \notin [1, \text{max\_steps}]$ e $p \notin [1, \text{num\_vehicles}]$ com fator multiplicativo $10.0$.
+
+
+* **Repulsão e Prevenção de Colisão:**
+Executado via potencial inverso $1.0 / (\text{dist\_sq} + 0.1)$ no espaço de fase $(x, p)$. Impede que duas cidades colapsem no mesmo ponto temporal e veículo durante a otimização.
+
+
+* **Penalidade Suave de Capacidade:**
+Modelado pela ponderação gaussiana do pertencimento da cidade ao veículo $v$ ($\exp(-(p_i - v)^2)$). Sobrecargas aplicam penalidade quadrática multiplicada por $\lambda_{\text{cap}}$.
+
+
+* **Quebra de Simetria e Posições Iniciais:**
+Definido em `vrp/circuit.py` dentro de `initialize_random_params`. Intercala $p_{\text{target}} = (i \pmod K) + 1$ no primeiro passo do `Dgate`, evitando que o VQE inicie em um ponto selha simétrico.
+
+
+* **Estabilidade de Otimização:**
+Garantido em `vrp/solver.py` com `tf.clip_by_global_norm(grads, 5.0)` e extração da parte real via `tf.math.real`, impedindo explosões de gradiente no espaço de fase.
+
+
+
+---
+
+**Métricas de Semelhança e Validação Integro-Clássica**
+
+* **Validação do Ground Truth (`core/brute_force.py`):**
+O `BruteForce` descarta partições onde `load > self.capacities[v_idx - 1]`. Garante que a base do `approx_ratio` venha de uma solução exata viável do CVRP.
+
+
+* **Contrato de Dados do Experimento (`metrics.py`):**
+A dataclass `ExperimentResult` registra os hiperparâmetros de contorno (`lmbda`, `lmbda_cap`, `vehicle_capacity`, `demands`), o histórico de convergência e a razão de eficiência $\text{approx\_ratio} = \frac{\text{exact\_cost}}{\text{quantum\_cost}}$.
+
+
+* **Análise Visual da Discretização (`vrp/main.py`):**
+A função `plot_phase_space` plota o desvio vetorial entre as quadraturas contínuas $(x_{\text{cont}}, p_{\text{cont}})$ do circuito e suas projeções discretas $(x_{\text{disc}}, p_{\text{disc}})$.
+
+
+
+---
+
+**Ponto de Ajuste Recomendado no `vrp/hamiltonian.py**`
+
+No `compute_continuous_cost_tf`, o termo de colisão utiliza repulsão por inverso da distância ($\frac{1}{\text{dist\_sq} + 0.1}$). Em instâncias com muitas cidades, essa formulação pode gerar gradientes muito altos se duas cidades se aproximarem. Substituir por uma gaussiana repulsiva do tipo $\exp(-\frac{\text{dist\_sq}}{2\sigma_x^2})$ confina a repulsão localmente e suaviza a superfície de perda.
