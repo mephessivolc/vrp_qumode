@@ -22,8 +22,8 @@ from utils import format_timespan, print_experiment_summary
 from path import get_images_path
 
 # Módulos do VRP
-from vrp.hamiltonian import Hamiltonian 
-from vrp.solver import Solver
+from qumodes.hamiltonian import Hamiltonian 
+from qumodes.solver import Solver
 
 def plot_phase_space(
     cont_x: list, 

@@ -11,8 +11,8 @@ root_dir = Path(__file__).resolve().parent.parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
-from vrp.hamiltonian import Hamiltonian
-from vrp.circuit import Circuit
+from qumodes.hamiltonian import Hamiltonian
+from qumodes.circuit import Circuit
 
 
 class Solver:
