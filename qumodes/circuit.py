@@ -73,6 +73,12 @@ class Circuit:
         return tf.stack(x_list), tf.stack(p_list)
 
     def initialize_warm_start_params(
+            self,
+            target_routes: Union[Dict[int, List[int]], List[List[int]], List[int]],
+            num_vehicles: int,
+            noise_scale: float = 0.01,
+            seed: int = 42
+        ) -> np.ndarray:
         self,
         target_routes: Union[Dict[int, List[int]], List[List[int]], List[int]],
         num_vehicles: int,
