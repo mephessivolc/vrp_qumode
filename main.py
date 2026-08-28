@@ -9,6 +9,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import time
+import os
 from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
@@ -78,6 +79,10 @@ def run(
     lmbda_cap: Optional[float] = None,
     optimizer_method: str = "ADAM",
     lr: float = 0.01,
+    use_warm_start: bool = False,
+    penalty_gamma: float = 1.0,
+    plateau_patience: int = 15,
+    noise_scale: float = 0.02,
     graph_type: str = "random", 
     device: str = "cpu",
     seed: int = 42,
@@ -94,12 +99,12 @@ def run(
     )
     logger.info(
         f"Iniciando Experimento {variable_type_path} {str_problem_type} (N={n_cities}, Vehicles={num_vehicles}, "
-        f"Cap={vehicle_capacity}, Layers={layers}, Reps={reps}, Opt={optimizer_method}, LR={lr}, Device={device.upper()}, MaxIter={maxiter})"
+        f"Cap={vehicle_capacity}, Layers={layers}, Reps={reps}, Opt={optimizer_method}, LR={lr}, WarmStart={use_warm_start}, Device={device.upper()}, MaxIter={maxiter})"
     )
 
     cap_info = vehicle_capacity if isinstance(vehicle_capacity, (int, float)) else "het"
     constructor_info_name = (
-        f"N{n_cities}_V{num_vehicles}_C{cap_info}_L{layers}_R{reps}_O{optimizer_method.lower()}_LR={lr}_M{maxiter}_G{graph_type.lower()}"
+        f"N{n_cities}_V{num_vehicles}_C{cap_info}_L{layers}_R{reps}_O{optimizer_method.lower()}_WS{use_warm_start}_M{maxiter}_G{graph_type.lower()}"
     )
 
     # 1. GERAÇÃO DO GRAFO E DEMANDAS (Inclui Depósito no índice 0)
@@ -147,14 +152,21 @@ def run(
         device=device
     )
 
-    # 4. SOLVER VQE
-    logger.info(f"4. Otimizando circuito VQE ({optimizer_method} | lr={lr} | device={device.upper()})...")
+    # 4. SOLVER VQE (Com Suporte a Warm-Start e Metodologia Avançada)
+    logger.info(f"4. Otimizando circuito VQE ({optimizer_method} | WarmStart={use_warm_start} | device={device.upper()})...")
     t0 = time.time()
     
+    warm_start_routes = exact_route if use_warm_start else None
+
     vqe_res = vqe_solver.solve(
+        warm_start_routes=warm_start_routes,
         maxiter=maxiter,
         optimizer_method=optimizer_method,
         lr=lr,
+        penalty_gamma=penalty_gamma,
+        plateau_patience=plateau_patience,
+        noise_scale=noise_scale,
+        exact_cost=exact_cost,
         seed=seed
     )
     t_vqe = time.time() - t0
@@ -175,6 +187,8 @@ def run(
     print("="*70)
     print(f"Custo Exato (Ground Truth): {exact_cost:.4f}")
     print(f"Custo Otimizado (CV-VQE)  : {vqe_cost:.4f}")
+    print(f"Score Composto             : {vqe_res['composite_score']:.4f}")
+    print(f"Viabilidade da Solução     : {'SIM' if vqe_res['is_feasible'] else 'NÃO'}")
     print(f"Razão de Aproximação       : {approx_ratio:.4f}")
     print(f"Demandas das Cidades      : {gb.demands.tolist()}")
     print(f"Capacidades dos Veículos  : {hamiltonian.capacities.tolist()}")
@@ -209,8 +223,8 @@ def run(
         seed=seed,
         n_cities=n_cities,
         num_vehicles=num_vehicles,
-        vehicle_capacity=hamiltonian.capacities.tolist(),  # Lista com as capacidades dos veículos
-        demands=gb.demands.tolist(),                        # Lista com as demandas das cidades
+        vehicle_capacity=hamiltonian.capacities.tolist(),
+        demands=gb.demands.tolist(),
         p_layers=layers,
         max_iter=maxiter,
         momentum_mass=1.0,
@@ -231,9 +245,12 @@ def run(
         cost_history=vqe_res["cost_history"]
     )
 
-    # Anexa o histórico da perda contínua no dicionário exportado
+    # Anexa o histórico da perda contínua e score composto no dicionário exportado
     exp_dict = experiment_res.to_dict()
     exp_dict["continuous_loss_history"] = vqe_res["continuous_loss_history"]
+    exp_dict["composite_score"] = vqe_res["composite_score"]
+    exp_dict["is_feasible"] = vqe_res["is_feasible"]
+    exp_dict["metrics_history"] = vqe_res["metrics_history"]
 
     print_experiment_summary(
         problem_type=str_problem_type.lower(),
@@ -279,7 +296,6 @@ def run(
         ax2.axhline(y=exact_cost, color='red', linestyle=':', label=f'Ground Truth ({exact_cost:.2f})')
         ax2.tick_params(axis='y', labelcolor=color)
 
-        # Combina legendas dos dois eixos
         lines_1, labels_1 = ax1.get_legend_handles_labels()
         lines_2, labels_2 = ax2.get_legend_handles_labels()
         ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper right')
@@ -299,8 +315,6 @@ def run(
 
 
 if __name__ == "__main__":
-    import os
-    # Silencia logs do C++ do TensorFlow
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
     import tensorflow as tf
 
@@ -316,91 +330,28 @@ if __name__ == "__main__":
 
     maxiter = 500    
 
-    # Bateria de testes Principais (Tamanho da Cidade, Veículos, Camadas)
-    city = [3]#, 4, 5]
-    vehicles = [1, 2]#, 3]
-    layers = [2]#, 1, 3]
-    demand_range = (5.0,8.0)
-    l_params = [None,10,50,75,100]
+    # Bateria de Testes Comparações: Warm-Start vs Cold-Start (Random)
+    cities = [3, 4]
+    vehicles = [1, 2]
+    optimizers = ["ADAM", "SPSA"]
+    warm_starts = [False, True]
 
-    for comb in product(city, vehicles, layers):
-        c, v, l = comb
+    for c, v, opt, ws in product(cities, vehicles, optimizers, warm_starts):
         run(
             n_cities=c,
             num_vehicles=v,
             vehicle_capacity=8.0,
-            demand_range=demand_range,
-            layers=l,
-            maxiter=maxiter,
-            optimizer_method="ADAM",
-            lr=0.01,
-            graph_type="random",
-            device="cuda",
-            seed=42,
-            save_outputs=True,
-            sub_folder="MAIN"
-        )
-    
-    # Bateria de testes de Penalização
-    for comb in list(product(vehicles, l_params)):
-        vehicle, l_param = comb
-        run(
-            n_cities=5,
-            num_vehicles=vehicle,
-            vehicle_capacity=10.0,
-            demand_range=demand_range,
+            demand_range=(1.0, 4.0),
             layers=2,
             maxiter=maxiter,
-            lmbda=l_param,
-            lmbda_cap=None,
-            optimizer_method="ADAM",
+            optimizer_method=opt,
+            use_warm_start=ws,
+            penalty_gamma=1.001,
+            plateau_patience=12,
             lr=0.01,
             graph_type="random",
             device="cuda",
             seed=42,
             save_outputs=True,
-            sub_folder="PENALIZATION"
-        )
-        
-
-    # Bateria de testes Principais (Tamanho da Cidade, Veículos, Camadas)
-    city = [3]#, 4, 5]
-    vehicles = [1, 2]#, 3]
-    layers = [2]#, 1, 3]
-    for comb in product(city, vehicles, layers):
-        c, v, l = comb
-        run(
-            n_cities=c,
-            num_vehicles=v,
-            vehicle_capacity=8.0,
-            layers=l,
-            maxiter=maxiter,
-            optimizer_method="ADAM",
-            lr=0.01,
-            graph_type="random",
-            device="cuda",
-            seed=42,
-            save_outputs=True,
-            sub_folder="MAIN"
-        )
-
-    # Bateria de testes por Topologia de Grafo
-    vehicles = [1, 3]
-    graph_type = ["euclidean", "circle", "grid", "clustered"]
-    for comb in list(product(vehicles, graph_type)):
-        v, g_type = comb
-        run(
-            n_cities=5,
-            num_vehicles=v,
-            vehicle_capacity=10.0,
-            layers=2,
-            maxiter=maxiter,
-            lmbda=10.0,
-            optimizer_method="ADAM",
-            lr=0.01,
-            graph_type=g_type,
-            device="cuda",
-            seed=42,
-            save_outputs=True,
-            sub_folder="MAIN"
+            sub_folder="WARM_START_BENCHMARK"
         )
