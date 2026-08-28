@@ -1,5 +1,8 @@
 services:
   app:
+    volumes:
+        - .:/workspace:cached
+        - /home-ext/clovis:/home-ext/clovis
    
     deploy:
       resources:
