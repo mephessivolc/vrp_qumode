@@ -317,9 +317,9 @@ if __name__ == "__main__":
     maxiter = 500    
 
     # Bateria de testes Principais (Tamanho da Cidade, Veículos, Camadas)
-    city = [3, 4, 5]
-    vehicles = [1, 2, 3]
-    layers = [2, 1, 3]
+    city = [3]#, 4, 5]
+    vehicles = [1, 2]#, 3]
+    layers = [2]#, 1, 3]
     demand_range = (5.0,8.0)
     l_params = [None,10,50,75,100]
 

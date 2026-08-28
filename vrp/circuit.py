@@ -1,5 +1,6 @@
 # vrp/circuit.py
 import numpy as np
+import tensorflow as tf
 import strawberryfields as sf
 from strawberryfields import ops
 from typing import Tuple, List, Optional
@@ -50,6 +51,32 @@ class Circuit:
                     param_idx += 1
 
         return prog, params
+
+    def extract_quadratures_tf(self, state) -> Tuple[tf.Tensor, tf.Tensor]:
+        """
+        Camada de interface Quântica-Clássica.
+        Calcula os valores esperados das quadraturas <x> e <p> para cada qumode
+        a partir do estado retornado pelo backend TensorFlow do Strawberry Fields.
+        
+        Remove a parte imaginária residual com tf.math.real() antes do cast para float32,
+        evitando warnings de conversão e mantendo a diferenciação automática limpa.
+        """
+        x_list = []
+        p_list = []
+        
+        for i in range(self.num_qumodes):
+            # Obtém os valores esperados das quadraturas x (phi=0) e p (phi=pi/2)
+            mean_x, _ = state.quad_expectation(i, phi=0.0)
+            mean_p, _ = state.quad_expectation(i, phi=np.pi / 2.0)
+            
+            # Sanitização de tipo: extração explícita da parte real
+            x_real = tf.cast(tf.math.real(mean_x), dtype=tf.float32)
+            p_real = tf.cast(tf.math.real(mean_p), dtype=tf.float32)
+            
+            x_list.append(x_real)
+            p_list.append(p_real)
+            
+        return tf.stack(x_list), tf.stack(p_list)
 
     def initialize_random_params(
         self, 

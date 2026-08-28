@@ -12,107 +12,103 @@ class Hamiltonian:
         lmbda: Union[float, None] = None,
         lmbda_cap: Union[float, None] = None,
     ):
+        # Nomes mantidos para compatibilidade com o main.py
         self.dist_matrix = np.array(dist_matrix, dtype=np.float32)
         self.num_nodes = len(dist_matrix)
         self.num_vehicles = num_vehicles
         self.num_free_cities = self.num_nodes - 1
         
-        # 1. Configuração de Demandas das Cidades
+        # 1. Configuração de Demandas
         if demands is None:
-            # Caso não sejam informadas, assume demanda unitária (1.0) para cada cidade livre e 0 para o depósito
             self.demands = np.ones(self.num_nodes, dtype=np.float32)
             self.demands[0] = 0.0
         else:
             self.demands = np.array(demands, dtype=np.float32)
             if len(self.demands) != self.num_nodes:
-                raise ValueError(f"O tamanho do vetor de demandas ({len(self.demands)}) deve ser igual a N ({self.num_nodes}).")
+                raise ValueError(f"Tamanho de demandas ({len(self.demands)}) diferente de N ({self.num_nodes}).")
 
-        # 2. Configuração de Capacidade dos Veículos (Homogênea ou Heterogênea)
+        # 2. Configuração de Capacidades
         if isinstance(vehicle_capacity, (float, int)):
             self.capacities = np.full(self.num_vehicles, float(vehicle_capacity), dtype=np.float32)
         else:
             self.capacities = np.array(vehicle_capacity, dtype=np.float32)
             if len(self.capacities) != self.num_vehicles:
-                raise ValueError(f"O vetor de capacidades ({len(self.capacities)}) deve ter tamanho igual a num_vehicles ({self.num_vehicles}).")
+                raise ValueError(f"Tamanho das capacidades ({len(self.capacities)}) diferente de num_vehicles ({self.num_vehicles}).")
 
-        # 3. Multiplicadores de Penalidade (Lagrange / Penalidade de Restrição)
-        if lmbda is not None:
-            if not isinstance(lmbda, (float, int)):
-                raise TypeError("O parâmetro 'lmbda' deve ser um número float ou int.")
-            self.lmbda = float(lmbda)
-        else:
-            self.lmbda = float(self.num_nodes * np.max(self.dist_matrix))
-        
-        if lmbda_cap is not None:
-            if not isinstance(lmbda_cap, (float, int)):
-                raise TypeError("O parâmetro 'lmbda_cap' deve ser um número float ou int.")
-            self.lmbda_cap = float(lmbda_cap)
-        else:
-            self.lmbda_cap = self.lmbda
+        # 3. Multiplicadores de Penalidade
+        self.lmbda = float(lmbda) if lmbda is not None else float(self.num_nodes * np.max(self.dist_matrix))
+        self.lmbda_cap = float(lmbda_cap) if lmbda_cap is not None else self.lmbda
 
         self.max_steps = self.num_free_cities
-
-        # Flag para chavear entre TSP (1 veículo) e VRP (> 1 veículos)
         self.is_tsp = (self.num_vehicles == 1)
-    
+
+        # 4. Constantes Pré-convertidas para TensorFlow
+        self.tf_dist_matrix = tf.constant(self.dist_matrix, dtype=tf.float32)
+        self.tf_free_dist = tf.constant(self.dist_matrix[1:, 1:], dtype=tf.float32)
+        self.tf_depot_start_dist = tf.constant(self.dist_matrix[0, 1:], dtype=tf.float32)
+        self.tf_depot_end_dist = tf.constant(self.dist_matrix[1:, 0], dtype=tf.float32)
+        self.tf_free_demands = tf.constant(self.demands[1:], dtype=tf.float32)
+        self.tf_capacities = tf.constant(self.capacities, dtype=tf.float32)
+        self.tf_vehicles_range = tf.range(1, self.num_vehicles + 1, dtype=tf.float32)
+
     def compute_continuous_cost_tf(self, x_tens: tf.Tensor, p_tens: tf.Tensor) -> tf.Tensor:
-        # 1. Manter quadraturas dentro do intervalo útil [1, max_steps] e [1, num_vehicles]
-        out_x = tf.reduce_sum(
-            tf.square(tf.maximum(0.0, 1.0 - x_tens)) + 
-            tf.square(tf.maximum(0.0, x_tens - float(self.max_steps)))
-        )
-        
-        out_p = tf.reduce_sum(
-            tf.square(tf.maximum(0.0, 1.0 - p_tens)) + 
-            tf.square(tf.maximum(0.0, p_tens - float(self.num_vehicles)))
-        )
-        
-        # 2. Repulsão Inversa Ativa (Evita que cidades colidam no espaço de fase)
-        col_penalty = 0.0
-        for i in range(self.num_free_cities):
-            for j in range(i + 1, self.num_free_cities):
-                if self.is_tsp:
-                    dist_sq = tf.square(x_tens[i] - x_tens[j])
-                else:
-                    dist_sq = tf.square(p_tens[i] - p_tens[j]) + tf.square(x_tens[i] - x_tens[j])
-                
-                col_penalty += 1.0 / (dist_sq + 0.1)
 
-        # 3. Penalidade de Capacidade (Substitui a antiga penalidade de veículo vazio)
-        capacity_penalty = 0.0
-        free_demands = tf.constant(self.demands[1:], dtype=tf.float32)  # Cidades livres 1..N-1
-        
-        for v_idx in range(self.num_vehicles):
-            v_num = float(v_idx + 1)
-            # Ponderação suave de pertencimento da cidade livre ao veículo v
-            weights = tf.exp(-tf.square(p_tens - v_num)) if not self.is_tsp else tf.ones_like(p_tens)
+        # Garante que os tensores de entrada sejam float32 reais sem disparar warnings
+        if x_tens.dtype.is_complex:
+            x_tens = tf.real(x_tens)
+        if p_tens.dtype.is_complex:
+            p_tens = tf.real(p_tens)
             
-            # Carga estimada no veículo v
-            load_v = tf.reduce_sum(free_demands * weights)
-            cap_v = float(self.capacities[v_idx])
-            
-            # Penalidade quadrática para sobrecarga (L_v > C_v)
-            overcapacity = tf.maximum(0.0, load_v - cap_v)
-            capacity_penalty += tf.square(overcapacity)
+        # 1. Confinamento de Domínio Vetorizado (Boundary Loss)
+        out_x = tf.reduce_sum(tf.square(tf.nn.relu(1.0 - x_tens)) + tf.square(tf.nn.relu(x_tens - float(self.max_steps))))
+        out_p = tf.reduce_sum(tf.square(tf.nn.relu(1.0 - p_tens)) + tf.square(tf.nn.relu(p_tens - float(self.num_vehicles))))
+        
+        # 2. Matrizes de Diferença no Espaço de Fase
+        dx = x_tens[:, None] - x_tens[None, :]  # Shape [N-1, N-1]
+        dp = p_tens[:, None] - p_tens[None, :]  # Shape [N-1, N-1]
 
-        # 4. Aproximação Suave da Distância (Soft Distance)
-        soft_dist_cost = 0.0
-        for i in range(self.num_free_cities):
-            for j in range(i + 1, self.num_free_cities):
-                if self.is_tsp:
-                    same_vehicle_prob = 1.0
-                else:
-                    same_vehicle_prob = tf.exp(-tf.square(p_tens[i] - p_tens[j]))
+        # 3. Repulsão Gaussiana Vetorizada entre Cidades (Sem Estouros de Gradiente)
+        dist_sq = tf.square(dx) if self.is_tsp else tf.square(dx) + tf.square(dp)
+        sigma = 0.5
+        gaussian_repulsion = tf.exp(-dist_sq / (2.0 * (sigma ** 2)))
+        mask_off_diag = 1.0 - tf.eye(self.num_free_cities, dtype=tf.float32)
+        col_penalty = tf.reduce_sum(gaussian_repulsion * mask_off_diag) / 2.0
 
-                adj_step_prob = tf.exp(-tf.square(tf.abs(x_tens[i] - x_tens[j]) - 1.0))
-                d_ij = self.dist_matrix[i + 1, j + 1]
-                soft_dist_cost += d_ij * same_vehicle_prob * adj_step_prob
+        # 4. Penalidade de Capacidade Totalmente Vetorizada
+        if not self.is_tsp:
+            # Pertencimento Gaussiano Suave [N-1, V]
+            vehicle_weights = tf.exp(-tf.square(p_tens[:, None] - self.tf_vehicles_range[None, :]))
+            load_per_vehicle = tf.reduce_sum(self.tf_free_demands[:, None] * vehicle_weights, axis=0)
+            overcapacity = tf.nn.relu(load_per_vehicle - self.tf_capacities)
+            capacity_penalty = tf.reduce_sum(tf.square(overcapacity))
+            cost_capacity_penalty = self.lmbda_cap * capacity_penalty
+        else:
+            cost_capacity_penalty = 0.0
 
-        cost_capacity_penalty = self.lmbda_cap * capacity_penalty if not self.is_tsp else 0.0
+        # 5. Custo de Distância Suavizado (Cidades Livres + Conexões com o Depósito)
+        same_vehicle_prob = 1.0 if self.is_tsp else tf.exp(-tf.square(dp))
+        adj_step_prob = tf.exp(-tf.square(tf.abs(dx) - 1.0))
+        
+        # Distância Cidades -> Cidades
+        free_cities_cost = tf.reduce_sum(self.tf_free_dist * same_vehicle_prob * adj_step_prob * mask_off_diag) / 2.0
+        
+        # Distância Depósito -> Primeira Cidade e Última Cidade -> Depósito
+        prob_first_step = tf.exp(-tf.square(x_tens - 1.0))
+        prob_last_step = tf.exp(-tf.square(x_tens - float(self.max_steps)))
+        
+        depot_start_cost = tf.reduce_sum(prob_first_step * self.tf_depot_start_dist)
+        depot_end_cost = tf.reduce_sum(prob_last_step * self.tf_depot_end_dist)
+        
+        soft_dist_cost = free_cities_cost + depot_start_cost + depot_end_cost
+
+        # Penalidade de discretização para p (mínimos globais nos inteiros 1, 2, ..., V)
+        pi = float(tf.constant(np.pi))
+        disc_p_penalty = tf.reduce_sum(tf.square(tf.sin(pi * p_tens)))
+
         # Custo Total Diferenciável
         total_loss = (
             10.0 * (out_x + out_p) 
-            + self.lmbda * col_penalty 
+            + self.lmbda * (col_penalty + disc_p_penalty)
             + cost_capacity_penalty
             + soft_dist_cost
         )

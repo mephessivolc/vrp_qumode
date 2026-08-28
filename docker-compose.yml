@@ -9,7 +9,6 @@ services:
     user: "${UID:-1025}:${GID:-1025}"
     volumes:
       - .:/workspace:cached
-      - /home-ext/clovis:/home-ext/clovis
     command: python main.py
     # 1. Evita que o TensorFlow aloque toda a VRAM de uma vez
     environment:
