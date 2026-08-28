@@ -314,7 +314,7 @@ if __name__ == "__main__":
 
     from itertools import product
 
-    maxiter = 5#00    
+    maxiter = 500    
 
     # Bateria de testes Principais (Tamanho da Cidade, Veículos, Camadas)
     city = [3]#, 4, 5]
@@ -328,13 +328,13 @@ if __name__ == "__main__":
         run(
             n_cities=c,
             num_vehicles=v,
-            vehicle_capacity=8.0,
+            vehicle_capacity=15.0,
             demand_range=demand_range,
             layers=l,
             maxiter=maxiter,
             optimizer_method="ADAM",
-            lr=0.01,
-            graph_type="random",
+            lr=0.005,
+            graph_type="warm_start",
             device="cuda",
             seed=42,
             save_outputs=True,

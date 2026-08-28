@@ -15,7 +15,9 @@ class GraphBuilder:
     Construtor e visualizador de grafos para problemas de otimização de rotas (TSP, VRP e CVRP).
     
     Permite inicialização por:
-      1. Geradores Automáticos via `graph_type` ("euclidean", "circle", "grid", "clustered", "random")
+      1. Geradores Automáticos via `graph_type`:
+         - Topologias Padrão: "euclidean", "circle", "grid", "clustered", "random"
+         - Modo Warm-Start: "warm_start" ou "warm_start_<topologia>" (ex: "warm_start_circle")
       2. Coordenadas Espaciais 2D/3D (`coords=[(x1,y1), ...]`)
       3. Matriz de distâncias pronta (`matrix=[...]`)
       4. Atribuição de demandas de carga para CVRP (`demands=[q0, q1, ...]`)
@@ -29,16 +31,25 @@ class GraphBuilder:
         matrix: Optional[Union[np.ndarray, List[List[float]]]] = None,
         demands: Optional[Union[np.ndarray, List[float]]] = None,
         demand_range: Tuple[float, float] = (1.0, 5.0),
+        num_vehicles: int = 2,
+        vehicle_capacity: Union[float, int, List[float], np.ndarray] = 10.0,
         logger: Optional[ExperimentLogger] = None,
         variable_type_path: str = "QUMODES",
         sub_folder: Union[str, None] = None
     ):
         self.seed = seed
         self.logger = logger if logger is not None else ExperimentLogger()
-        self.graph_type = graph_type
+        self.graph_type = graph_type.lower()
         self.coords = None
         self.variable_type_path = variable_type_path
         self.sub_folder = sub_folder
+        self.num_vehicles = num_vehicles
+        self.vehicle_capacity = vehicle_capacity
+
+        # Atributos de armazenamento de soluções Heurísticas / Warm-Start
+        self.warm_start_tsp: Optional[List[int]] = None
+        self.warm_start_vrp: Optional[Dict[int, List[int]]] = None
+        self.warm_start_quadratures: Optional[Tuple[np.ndarray, np.ndarray]] = None
 
         # 1. Definir Matriz e N
         if matrix is not None:
@@ -75,6 +86,10 @@ class GraphBuilder:
             gen_demands[0] = 0.0  # Depósito (Nó 0)
             self.demands = gen_demands.astype(np.float32)
 
+        # 3. Inicialização Automática por Warm-Start se especificado no `graph_type`
+        if "warm_start" in self.graph_type:
+            self.build_warm_start()
+
     def _build_matrix_from_coords(self, coords: np.ndarray) -> np.ndarray:
         """Calcula matriz de distâncias euclidianas a partir de coordenadas 2D/3D."""
         diff = coords[:, np.newaxis, :] - coords[np.newaxis, :, :]
@@ -85,16 +100,21 @@ class GraphBuilder:
         """Gera matrizes e posições baseadas no modelo topológico selecionado."""
         np.random.seed(self.seed)
 
-        if self.graph_type == "euclidean":
+        # Extrai a topologia base caso seja especificado warm_start (ex: "warm_start_circle" -> "circle")
+        base_type = self.graph_type.replace("warm_start_", "").replace("warm_start", "").strip("_")
+        if not base_type:
+            base_type = "euclidean"
+
+        if base_type == "euclidean":
             self.coords = np.random.uniform(10, 90, size=(self.n, 2))
             return self._build_matrix_from_coords(self.coords)
 
-        elif self.graph_type == "circle":
+        elif base_type == "circle":
             angles = np.linspace(0, 2 * np.pi, self.n, endpoint=False)
             self.coords = np.column_stack((50 + 35 * np.cos(angles), 50 + 35 * np.sin(angles)))
             return self._build_matrix_from_coords(self.coords)
 
-        elif self.graph_type == "grid":
+        elif base_type == "grid":
             side = int(np.ceil(np.sqrt(self.n)))
             grid_points = []
             for i in range(self.n):
@@ -104,7 +124,7 @@ class GraphBuilder:
             self.coords = np.array(grid_points)
             return self._build_matrix_from_coords(self.coords)
 
-        elif self.graph_type == "clustered":
+        elif base_type == "clustered":
             num_clusters = max(2, self.n // 2)
             centers = np.random.uniform(20, 80, size=(num_clusters, 2))
             cluster_pts = []
@@ -120,6 +140,113 @@ class GraphBuilder:
             adj = (adj + adj.T) / 2.0
             np.fill_diagonal(adj, 0.0)
             return np.round(adj, 2)
+
+    # -------------------------------------------------------------------------
+    # MÉTODOS DE GERACÃO E INICIALIZAÇÃO HEURÍSTICA (WARM-START)
+    # -------------------------------------------------------------------------
+
+    def build_warm_start(
+        self, 
+        num_vehicles: Optional[int] = None, 
+        vehicle_capacity: Optional[Union[float, int, List[float], np.ndarray]] = None
+    ) -> Dict:
+        """
+        Executa os algoritmos heurísticos para construir os dados de Warm-Start
+        e popula os atributos da classe.
+        """
+        n_veh = num_vehicles if num_vehicles is not None else self.num_vehicles
+        cap_veh = vehicle_capacity if vehicle_capacity is not None else self.vehicle_capacity
+
+        self.warm_start_tsp = self.generate_nearest_neighbor_tsp()
+        self.warm_start_vrp = self.generate_greedy_vrp(num_vehicles=n_veh, vehicle_capacity=cap_veh)
+        self.warm_start_quadratures = self.get_warm_start_quadratures(num_vehicles=n_veh, vehicle_capacity=cap_veh)
+
+        return {
+            "tsp_route": self.warm_start_tsp,
+            "vrp_routes": self.warm_start_vrp,
+            "quadratures": self.warm_start_quadratures
+        }
+
+    def generate_nearest_neighbor_tsp(self, start_node: int = 0) -> List[int]:
+        """Gera uma rota TSP heurística via Vizinho Mais Próximo."""
+        unvisited = set(range(self.n))
+        unvisited.remove(start_node)
+        route = [start_node]
+        current = start_node
+
+        while unvisited:
+            next_node = min(unvisited, key=lambda node: self.matrix[current, node])
+            route.append(next_node)
+            unvisited.remove(next_node)
+            current = next_node
+
+        return route
+
+    def generate_greedy_vrp(
+        self, 
+        num_vehicles: int, 
+        vehicle_capacity: Union[float, int, List[float], np.ndarray]
+    ) -> Dict[int, List[int]]:
+        """Gera rotas heurísticas para o CVRP respeitando limites de capacidade."""
+        if isinstance(vehicle_capacity, (float, int)):
+            caps = [float(vehicle_capacity)] * num_vehicles
+        else:
+            caps = [float(c) for c in vehicle_capacity]
+
+        unvisited = set(range(1, self.n))
+        routes = {v + 1: [0] for v in range(num_vehicles)}
+
+        for v_idx in range(num_vehicles):
+            v_id = v_idx + 1
+            current_cap = caps[v_idx]
+            current_node = 0
+
+            while unvisited:
+                feasible_nodes = [
+                    node for node in unvisited 
+                    if self.demands[node] <= current_cap
+                ]
+                if not feasible_nodes:
+                    break
+
+                next_node = min(feasible_nodes, key=lambda node: self.matrix[current_node, node])
+                routes[v_id].append(next_node)
+                current_cap -= self.demands[next_node]
+                unvisited.remove(next_node)
+                current_node = next_node
+
+            routes[v_id].append(0)
+
+        if unvisited:
+            for idx, node in enumerate(sorted(unvisited)):
+                v_id = (idx % num_vehicles) + 1
+                routes[v_id].insert(-1, node)
+
+        return routes
+
+    def get_warm_start_quadratures(
+        self, 
+        num_vehicles: int, 
+        vehicle_capacity: Union[float, int, List[float], np.ndarray]
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Mapeia as rotas heurísticas CVRP em alvos de quadraturas contínuas (x, p)."""
+        routes = self.generate_greedy_vrp(num_vehicles=num_vehicles, vehicle_capacity=vehicle_capacity)
+        
+        x_targets = np.zeros(self.n - 1, dtype=np.float32)
+        p_targets = np.zeros(self.n - 1, dtype=np.float32)
+
+        for v_id, route in routes.items():
+            free_cities = [node for node in route if node != 0]
+            for step_idx, city_node in enumerate(free_cities):
+                city_idx = city_node - 1
+                x_targets[city_idx] = float(step_idx + 1)
+                p_targets[city_idx] = float(v_id)
+
+        return x_targets, p_targets
+
+    # -------------------------------------------------------------------------
+    # MÉTODOS DE VISUALIZAÇÃO E PLOTAGEM
+    # -------------------------------------------------------------------------
 
     def _get_layout(self, G: nx.Graph) -> Dict:
         """Utiliza as coordenadas reais no mapa (se existirem) ou spring_layout."""
@@ -301,7 +428,6 @@ class GraphBuilder:
             color = color_palette[(idx) % len(color_palette)]
             sanitized_route = [int(node) % self.n for node in route]
 
-            # Calcula a carga total do veículo para exibir na legenda
             v_load = sum(self.demands[node] for node in sanitized_route)
             v_load_str = f"{int(v_load)}" if v_load.is_integer() else f"{v_load:.1f}"
 

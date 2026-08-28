@@ -36,7 +36,7 @@ class Hamiltonian:
                 raise ValueError(f"Tamanho das capacidades ({len(self.capacities)}) diferente de num_vehicles ({self.num_vehicles}).")
 
         # 3. Multiplicadores de Penalidade
-        self.lmbda = float(lmbda) if lmbda is not None else float(self.num_nodes * np.max(self.dist_matrix))
+        self.lmbda = float(lmbda) if lmbda is not None else float(1.8 * self.num_nodes * np.max(self.dist_matrix))
         self.lmbda_cap = float(lmbda_cap) if lmbda_cap is not None else self.lmbda
 
         self.max_steps = self.num_free_cities
