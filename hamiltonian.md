@@ -362,3 +362,53 @@ A função `plot_phase_space` plota o desvio vetorial entre as quadraturas cont�
 **Ponto de Ajuste Recomendado no `vrp/hamiltonian.py**`
 
 No `compute_continuous_cost_tf`, o termo de colisão utiliza repulsão por inverso da distância ($\frac{1}{\text{dist\_sq} + 0.1}$). Em instâncias com muitas cidades, essa formulação pode gerar gradientes muito altos se duas cidades se aproximarem. Substituir por uma gaussiana repulsiva do tipo $\exp(-\frac{\text{dist\_sq}}{2\sigma_x^2})$ confina a repulsão localmente e suaviza a superfície de perda.
+
+
+___
+---
+---
+# Depois da Refatoração
+A refatoração do sistema consolida a transição de um otimizador contínuo genérico para um framework de CV-VQE focado em problemas de roteamento (CVRP/TSP), permitindo extrair métricas de viabilidade física, qualidade de rota e dinâmica de convergência.
+
+**Métricas Esperadas**
+
+* **`is_feasible` (Booleano):** Indica se as rotas decodificadas respeitam simultaneamente a visitação única de cada cidade, a ordenação temporal e os limites de capacidade dos veículos.
+* **`route_distance` (Float):** Distância física total percorrida pela frota, isolada de qualquer termo de penalidade matemática do Hamiltoniano.
+* **`capacity_violation` (Float):** Soma escalar do excesso de carga alocada aos veículos além de suas capacidades máximas.
+* **`composite_score` (Float):** Métrica sintética que pondera a razão de aproximação relativa ao valor exato e a penalidade por violação de restrições.
+* **`approx_ratio` (Float):** Qualidade da solução em relação ao valor ótimo global ($\frac{C_{\text{exato}}}{C_{\text{VQE}}}$).
+* **`continuous_loss_history` e `cost_history` (Arrays):** Evolução temporal da perda contínua diferenciável (suave) calculada pelo TensorFlow e do custo discreto decorrente do arredondamento das quadraturas no espaço de fase ($x, p$).
+
+**Resultados e Comportamentos Esperados**
+
+* **Aceleração de Convergência via Warm-Start:**
+* *Resultado Esperado:* Aumento expressivo da taxa de sucesso (`is_feasible = True`) e redução no número de iterações para atingir a convergência quando comparado à inicialização aleatória.
+* *Justificativa:* O mapeamento de rotas válidas para os parâmetros do `Dgate` via raio $r = \sqrt{\alpha_x^2 + \alpha_p^2}$ e fase $\phi = \arctan2(\alpha_p, \alpha_x)$ inicializa os qumodes diretamente nas regiões de maior probabilidade no espaço de fase, quebrando a simetria inicial dos modos e evitando mínimos locais superficiais.
+
+
+* **Superação de Platôs via Injeção de Ruído:**
+* *Resultado Esperado:* Presença de picos pontuais na perda contínua (`continuous_loss_history`) seguidos por quedas para níveis de energia inferiores ao estado estagnado anterior.
+* *Justificativa:* Quando a variação da perda atinge $\vert{}\Delta L\vert{} < 10^{-4}$ durante o período de paciência (`plateau_patience`), a adição de ruído gaussiano aos parâmetros variacionais desloca o estado quântico de platôs de gradiente nulo (*barren plateaus*).
+
+
+* **Evolução da Viabilidade via Annealing de Penalidades (`penalty_gamma`):**
+* *Resultado Esperado:* Estágios iniciais focados na minimização da distância geométrica, seguidos por uma rápida correção em direção a rotas válidas nas iterações finais.
+* *Justificativa:* O escalonamento dinâmico $\lambda(k) = \lambda_0 \cdot \gamma^k$ evita que os termos de penalidade se sobreponham excessivamente aos termos de distância no início do treinamento, garantindo maior explorabilidade do espaço de busca antes de impor o colapso estrito das restrições.
+
+
+* **Divergência de Trajetória entre ADAM e SPSA:**
+* *Resultado Esperado:* O ADAM apresentará curvas de convergência mais suaves e estáveis, enquanto o SPSA apresentará oscilações estocásticas em cada passo, mas com menor custo de processamento por iteração.
+* *Justificativa:* O ADAM utiliza diferenciação automática exata via `tf.GradientTape`, calculando o gradiente analítico das quadraturas. O SPSA aproxima o gradiente amostrando apenas duas avaliações perturbadas ($w \pm c_k \delta$), o que introduz ruído na estimativa da direção de descida.
+
+___
+___
+___
+
+**Perda Contínua**
+É o valor da função objetivo (expectativa do Hamiltoniano) otimizada diretamente pelo otimizador contínuo (como o otimizador Adam) a cada iteração. Ela combina o custo estimado do trajeto com as penalidades matemáticas adicionadas para forçar o circuito quântico a respeitar as restrições do problema (por exemplo, visitar cada cidade exatamente uma vez). Por ser avaliada em um espaço contínuo de parâmetros quânticos, essa curva costuma apresentar oscilações e valores elevados devido ao peso das penalidades.
+
+**Custo Discreto**
+É a distância física real da rota resultante quando o estado quântico contínuo daquela iteração é decodificado/amostrado em uma solução combinatorial válida (uma sequência discreta de cidades, como `[0, 1, 2, 3, 0]`). Esse parâmetro mede a qualidade prática da rota que o algoritmo quântico gerou naquele momento, desconsiderando os termos adicionais de penalidade da função de perda contínua.
+
+**Ground Truth**
+É a solução ótima global calculada previamente por um método clássico exato (como o Brute Force). Ela representa o menor custo físico possível para percorrer todas as cidades da instância (no seu caso, o valor 24,05). Nos gráficos de convergência, o Ground Truth é plotado como uma linha horizontal fixa para servir de baseline, permitindo visualizar em qual iteração o *Custo Discreto* atinge ou se aproxima do resultado ideal.
