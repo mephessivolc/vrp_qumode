@@ -412,3 +412,108 @@ ___
 
 **Ground Truth**
 É a solução ótima global calculada previamente por um método clássico exato (como o Brute Force). Ela representa o menor custo físico possível para percorrer todas as cidades da instância (no seu caso, o valor 24,05). Nos gráficos de convergência, o Ground Truth é plotado como uma linha horizontal fixa para servir de baseline, permitindo visualizar em qual iteração o *Custo Discreto* atinge ou se aproxima do resultado ideal.
+---
+---
+---
+---
+
+# Novos Decodificadores do problema
+
+A necessidade desses decodificadores surge do desafio fundamental da computação quântica de variáveis contínuas (CV-Quantum Computing): **converter o espaço de fase contínuo $(x, p)$ dos qumodes em uma solução combinatória estritamente discreta para o VRP**.
+
+Sem decodificadores estruturados, a otimização contínua do circuito quântico fica desconectada da qualidade real da rota discreta.
+
+---
+
+## O Problema do Arredondamento Simples (`round`/`clip`)
+
+Quando o otimizador ajusta os parâmetros do circuito, as quadraturas $(x, p)$ variam de forma contínua (ex.: $1.48 \to 1.52$). O método anterior de arredondamento simples gerava dois problemas graves:
+
+* **Colisões Indesejadas:** Se a Cidade 1 resulta em $x_1 = 1.4$ e a Cidade 2 resulta em $x_2 = 1.3$, o arredondamento simples envia ambas para o passo $1$. O problema de roteamento é violado porque duas cidades não podem ser visitadas no mesmo passo do mesmo veículo.
+* **Saltos Abruptos no Custo Discreto:** Uma alteração mínima nos parâmetros contínuos pode fazer $x$ mudar de $1.49$ para $1.51$. O arredondamento salta a cidade do passo $1$ para o passo $2$, alterando bruscamente a distância discreta. Isso gera picos e oscilações desconectados da curva de perda contínua.
+
+---
+
+## Papel e Importância de Cada Decodificador
+
+### 1. `HungarianDecoder` (Algoritmo Húngaro / Kuhn-Munkres)
+
+* **Necessidade:** Garantir a criação de rotas sem colisões sem precisar forçar o circuito quântico a ser perfeitamente discreto desde a primeira iteração.
+* **Utilidade:** Transforma o problema de atribuição em um emparelhamento bipartido de custo mínimo $O(N^3)$. Ele calcula a permutação de menor distância total entre os valores contínuos $x$ e os passos discretos $\{1, 2, \dots, N\}$.
+* **Por que é importante:** Mesmo se o circuito colocar duas cidades com valores contínuos muito próximos ($x_1 = 1.4$ e $x_2 = 1.3$), o algoritmo Húngaro atribui obrigatoriamente uma cidade ao passo $1$ e a outra ao passo $2$. Isso elimina totalmente as colisões artificiais no cálculo do custo discreto, estabilizando a curva verde nos gráficos de convergência.
+
+### 2. `SoftmaxAnnealingDecoder` (Relaxamento Probabilístico)
+
+* **Necessidade:** Evitar que a otimização fique presa em mínimos locais nas fases iniciais devido a decisões de arredondamento rígidas.
+* **Utilidade:** Modela a escolha do passo e do veículo como uma distribuição de probabilidade ponderada por uma temperatura $T$:
+
+$$\text{Probabilidade}(x \to \text{passo } k) \propto \exp\left(-\frac{(x - k)^2}{T}\right)$$
+
+
+* **Por que é importante:** No início do treinamento (temperatura alta), a decisão é "suave" e pequenas variações no circuito não alteram drasticamente o estado discreto. À medida que a otimização avança, a temperatura $T$ reduz gradualmente (annealing), tornando a conversão cada vez mais determinística até se fixar na rota final.
+
+### 3. `ArgmaxDecoder` (Mapeamento Direto)
+
+* **Necessidade:** Servir como linha de base (baseline) de controle e para verificações rápidas de desempenho.
+* **Utilidade:** Aplica o arredondamento estático direto com complexidade $O(N)$.
+* **Por que é importante:** Permite comparar diretamente o ganho de estabilidade e de qualidade da rota obtido pelo `HungarianDecoder` e pelo `SoftmaxAnnealingDecoder` em relação ao método ingênuo.
+
+___
+---
+---
+---
+
+# Balanceamento do parâmetros de penalização
+
+A necessidade do **`qumodes/schedulers.py`** surge do dilema fundamental na otimização com restrições via VQE/Algoritmos Quânticos: **como balancear a minimização do custo (distância percorrida) com o cumprimento das regras do problema (ausência de colisões e limites de capacidade)**.
+
+Quando transformamos o problema do VRP em uma função de perda para o circuito quântico, usamos multiplicadores de penalidade ($\lambda$). Se mantivermos esses multiplicadores fixos do início ao fim do treinamento, enfrentamos dois problemas críticos:
+
+---
+
+### Os Problemas da Penalidade Específica e Fixa
+
+1. **Penalidade Muito Alta no Início ($\lambda$ elevado):**
+* **Problema:** A superfície de energia do Hamiltoniano fica dominada por "paredões" de penalidade.
+* **Consequência:** O otimizador fica tão obcecado em não violar restrições que ignora totalmente a distância das rotas. Ele trava rapidamente no primeiro mínimo local viável que encontra, gerando rotas muito ruins (subótimas).
+
+
+2. **Penalidade Muito Baixa no Início ($\lambda$ reduzido):**
+* **Problema:** O otimizador foca apenas em reduzir a distância total das rotas.
+* **Consequência:** A solução converte para rotas matematicamente curtas, porém impossíveis no mundo real (ex.: todas as cidades visitadas no mesmo instante ou veículos sobrecarregados).
+
+
+
+---
+
+### A Utilidade do `schedulers.py`
+
+O `schedulers.py` introduz o conceito de **ajuste dinâmico de penalidades durante a otimização**. Ele permite que o circuito quântico explore livremente o espaço de soluções nas primeiras iterações e, gradualmente, "aperte o cerco" para forçar a solução a ser válida no final.
+
+#### Estratégias Implementadas
+
+* **`ExponentialPenaltyScheduler` (Annealing de Penalidade):**
+* **Como funciona:** Multiplica os valores de $\lambda$ por um fator constante a cada passo ($1.05 \times \lambda$).
+* **Utilidade:** Dá liberdade total ao circuito quântico para explorar combinações de rotas no início (com $\lambda$ baixo) e aumenta a rigidez conforme o algoritmo se aproxima do final do treinamento.
+
+
+* **`AugmentedLagrangianScheduler` (Lagrangeano Aumentado Adaptativo):**
+* **Como funciona:** Observa os resultados do passo anterior e aumenta a penalidade **somente se houver violação real** (colisão ou excesso de carga).
+* **Utilidade:** Evita aumentar penalidades desnecessariamente se o sistema já encontrou uma rota válida, permitindo focar os recursos do gradiente no encurtamento da distância.
+
+
+* **`AdaptiveConstraintScheduler` (Reajuste Bidirecional):**
+* **Como funciona:** Aumenta $\lambda$ se houver violação e **reduz ligeiramente $\lambda$** se a solução atual for viável.
+* **Utilidade:** Mantém a otimização na "fronteira de viabilidade". Se a restrição for atendida, o scheduler reduz a penalidade para que o otimizador tente cortar caminho e melhorar a distância.
+
+
+
+---
+
+### Impacto na Convergência do Algoritmo
+
+| Sem Scheduler (Penalidade Fixo) | Com Scheduler (`schedulers.py`) |
+| --- | --- |
+| **Gradientes Travados:** O otimizador fica estático em mínimos locais ruins. | **Exploração Eficiente:** O circuito aprende primeiro a geometria do mapa e depois ajusta o respeito às regras. |
+| **Oscilação no Custo Discreto:** Pequenas variações no parâmetro geram saltos imensos no custo. | **Convergência Suave:** A perda contínua e o custo discreto convergem em sintonia. |
+| **Dificuldade de Ajuste Manual:** Exige adivinhar o valor exato de $\lambda$ para cada instância de grafo. | **Autocorreção:** O próprio algoritmo adapta os pesos de acordo com a dificuldade da instância. |

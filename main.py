@@ -25,6 +25,13 @@ from path import get_images_path
 # Módulos do VRP
 from qumodes.hamiltonian import Hamiltonian 
 from qumodes.solver import Solver
+from qumodes.decoders import HungarianDecoder, ArgmaxDecoder, SoftmaxAnnealingDecoder
+from qumodes.schedulers import (
+    AugmentedLagrangianScheduler, 
+    ExponentialPenaltyScheduler, 
+    AdaptiveConstraintScheduler
+)
+
 
 def plot_phase_space(
     cont_x: list, 
@@ -66,6 +73,34 @@ def plot_phase_space(
     plt.close()
 
 
+def _get_decoder_instance(decoder_name: str) -> Any:
+    """Instancia o decodificador com base na estratégia selecionada."""
+    name = decoder_name.lower()
+    if name == "hungarian":
+        return HungarianDecoder()
+    elif name == "softmax":
+        return SoftmaxAnnealingDecoder()
+    elif name == "argmax":
+        return ArgmaxDecoder()
+    else:
+        return HungarianDecoder()
+
+
+def _get_scheduler_instance(scheduler_name: str, penalty_gamma: float) -> Optional[Any]:
+    """Instancia o agendador de penalidades com base na estratégia selecionada."""
+    name = scheduler_name.lower()
+    if name == "augmented_lagrangian":
+        return AugmentedLagrangianScheduler()
+    elif name == "exponential":
+        return ExponentialPenaltyScheduler(gamma=penalty_gamma)
+    elif name == "adaptive":
+        return AdaptiveConstraintScheduler()
+    elif name in ["none", "fixed"]:
+        return None
+    else:
+        return AugmentedLagrangianScheduler()
+
+
 def run(
     n_cities: int = 3,
     num_vehicles: int = 2,
@@ -78,9 +113,11 @@ def run(
     lmbda: Optional[float] = None,
     lmbda_cap: Optional[float] = None,
     optimizer_method: str = "ADAM",
+    decoder_name: str = "hungarian",
+    scheduler_name: str = "augmented_lagrangian",
     lr: float = 0.01,
     use_warm_start: bool = False,
-    penalty_gamma: float = 1.0,
+    penalty_gamma: float = 1.05,
     plateau_patience: int = 15,
     noise_scale: float = 0.02,
     graph_type: str = "random", 
@@ -99,12 +136,14 @@ def run(
     )
     logger.info(
         f"Iniciando Experimento {variable_type_path} {str_problem_type} (N={n_cities}, Vehicles={num_vehicles}, "
-        f"Cap={vehicle_capacity}, Layers={layers}, Reps={reps}, Opt={optimizer_method}, LR={lr}, WarmStart={use_warm_start}, Device={device.upper()}, MaxIter={maxiter})"
+        f"Cap={vehicle_capacity}, Layers={layers}, Reps={reps}, Opt={optimizer_method}, Decoder={decoder_name.upper()}, "
+        f"Scheduler={scheduler_name.upper()}, LR={lr}, WarmStart={use_warm_start}, Device={device.upper()}, MaxIter={maxiter})"
     )
 
     cap_info = vehicle_capacity if isinstance(vehicle_capacity, (int, float)) else "het"
     constructor_info_name = (
-        f"N{n_cities}_V{num_vehicles}_C{cap_info}_L{layers}_R{reps}_O{optimizer_method.lower()}_WS{use_warm_start}_M{maxiter}_G{graph_type.lower()}"
+        f"N{n_cities}_V{num_vehicles}_C{cap_info}_L{layers}_R{reps}_O{optimizer_method.lower()}_"
+        f"D{decoder_name.lower()}_S{scheduler_name.lower()}_WS{use_warm_start}_M{maxiter}_G{graph_type.lower()}"
     )
 
     # 1. GERAÇÃO DO GRAFO E DEMANDAS (Inclui Depósito no índice 0)
@@ -135,7 +174,7 @@ def run(
     t_exact = time.time() - t0
     logger.info(f"   ► Custo Exato: {exact_cost:.4f} | Tempo: {format_timespan(t_exact)}")
 
-    # 3. HAMILTONIANO DO CVRP (Insere Capacidade e Demandas)
+    # 3. HAMILTONIANO DO CVRP E SOLVER CV-VQE
     logger.info("3. Construindo operadores do Hamiltoniano CV para CVRP...")
     hamiltonian = Hamiltonian(
         dist_matrix=gb.matrix, 
@@ -152,8 +191,12 @@ def run(
         device=device
     )
 
-    # 4. SOLVER VQE (Com Suporte a Warm-Start e Metodologia Avançada)
-    logger.info(f"4. Otimizando circuito VQE ({optimizer_method} | WarmStart={use_warm_start} | device={device.upper()})...")
+    # Instanciação do Decodificador e Agendador
+    decoder = _get_decoder_instance(decoder_name)
+    penalty_scheduler = _get_scheduler_instance(scheduler_name, penalty_gamma)
+
+    # 4. SOLVER VQE (Com Decodificador, Agendador Dinâmico e Warm-Start)
+    logger.info(f"4. Otimizando circuito VQE ({optimizer_method} | Decoder={decoder_name.upper()} | Scheduler={scheduler_name.upper()} | device={device.upper()})...")
     t0 = time.time()
     
     warm_start_routes = exact_route if use_warm_start else None
@@ -164,6 +207,8 @@ def run(
         optimizer_method=optimizer_method,
         lr=lr,
         penalty_gamma=penalty_gamma,
+        penalty_scheduler=penalty_scheduler,
+        decoder=decoder,
         plateau_patience=plateau_patience,
         noise_scale=noise_scale,
         exact_cost=exact_cost,
@@ -181,17 +226,20 @@ def run(
     disc_x = vqe_res["disc_x"]
     disc_p = vqe_res["disc_p"]
     routes = vqe_res["routes"]
+    spearman_corr = vqe_res.get("spearman_correlation", 0.0)
 
     print("\n" + "="*70)
     print(f"                     RESULTADOS FINAIS DO {str_problem_type} (CVRP)                     ")
     print("="*70)
-    print(f"Custo Exato (Ground Truth): {exact_cost:.4f}")
-    print(f"Custo Otimizado (CV-VQE)  : {vqe_cost:.4f}")
-    print(f"Score Composto             : {vqe_res['composite_score']:.4f}")
-    print(f"Viabilidade da Solução     : {'SIM' if vqe_res['is_feasible'] else 'NÃO'}")
-    print(f"Razão de Aproximação       : {approx_ratio:.4f}")
-    print(f"Demandas das Cidades      : {gb.demands.tolist()}")
-    print(f"Capacidades dos Veículos  : {hamiltonian.capacities.tolist()}")
+    print(f"Custo Exato (Ground Truth)   : {exact_cost:.4f}")
+    print(f"Custo Otimizado (CV-VQE)    : {vqe_cost:.4f}")
+    print(f"Score Composto               : {vqe_res['composite_score']:.4f}")
+    print(f"Correlação de Spearman       : {spearman_corr:.4f}")
+    print(f"Viabilidade da Solução       : {'SIM' if vqe_res['is_feasible'] else 'NÃO'}")
+    print(f"Razão de Aproximação         : {approx_ratio:.4f}")
+    print(f"Demandas das Cidades        : {gb.demands.tolist()}")
+    print(f"Capacidades dos Veículos    : {hamiltonian.capacities.tolist()}")
+    print(f"Penalidades Finais          : Colisão={hamiltonian.lmbda_col:.2f} | Capacidade={hamiltonian.lmbda_cap:.2f}")
     print("-" * 70)
     print("Medições das Quadraturas no Espaço de Fase:")
     for i in range(n_cities):
@@ -228,7 +276,7 @@ def run(
         p_layers=layers,
         max_iter=maxiter,
         momentum_mass=1.0,
-        lmbda=hamiltonian.lmbda,
+        lmbda=hamiltonian.lmbda_col,
         lmbda_cap=hamiltonian.lmbda_cap,
         exact_cost=exact_cost,
         exact_route=exact_route,
@@ -245,11 +293,11 @@ def run(
         cost_history=vqe_res["cost_history"]
     )
 
-    # Anexa o histórico da perda contínua e score composto no dicionário exportado
     exp_dict = experiment_res.to_dict()
     exp_dict["continuous_loss_history"] = vqe_res["continuous_loss_history"]
     exp_dict["composite_score"] = vqe_res["composite_score"]
     exp_dict["is_feasible"] = vqe_res["is_feasible"]
+    exp_dict["spearman_correlation"] = spearman_corr
     exp_dict["metrics_history"] = vqe_res["metrics_history"]
 
     print_experiment_summary(
@@ -278,7 +326,7 @@ def run(
             prefix=f"vqe_{constructor_info_name}"
         )
 
-        # c) Plot da Curva de Convergência (Dual Axis: Perda Contínua Suave vs. Custo Discreto)
+        # c) Plot da Curva de Convergência Dual Axis
         conv_path = figures_dir / f"convergence_{constructor_info_name}.png"
         fig, ax1 = plt.subplots(figsize=(9, 5))
 
@@ -328,15 +376,16 @@ if __name__ == "__main__":
 
     from itertools import product
 
-    maxiter = 500    
+    maxiter = 50
 
-    # Bateria de Testes Comparações: Warm-Start vs Cold-Start (Random)
-    cities = [3, 4]
-    vehicles = [1, 2]
-    optimizers = ["ADAM", "SPSA"]
-    warm_starts = [False, True]
+    # Bateria de Testes Comparações: Warm-Start vs Cold-Start (Random) com Decodificadores e Schedulers
+    cities = [3]
+    vehicles = [2]
+    optimizers = ["ADAM"]
+    decoders = ["hungarian", "argmax"]
+    schedulers = ["augmented_lagrangian", "exponential"]
 
-    for c, v, opt, ws in product(cities, vehicles, optimizers, warm_starts):
+    for c, v, opt, dec, sched in product(cities, vehicles, optimizers, decoders, schedulers):
         run(
             n_cities=c,
             num_vehicles=v,
@@ -345,13 +394,15 @@ if __name__ == "__main__":
             layers=2,
             maxiter=maxiter,
             optimizer_method=opt,
-            use_warm_start=ws,
-            penalty_gamma=1.001,
+            decoder_name=dec,
+            scheduler_name=sched,
+            use_warm_start=False,
+            penalty_gamma=1.02,
             plateau_patience=12,
             lr=0.01,
             graph_type="random",
             device="cuda",
             seed=42,
             save_outputs=True,
-            sub_folder="WARM_START_BENCHMARK"
+            sub_folder="SCHEDULER_DECODER_BENCHMARK"
         )

@@ -79,12 +79,7 @@ class Circuit:
             noise_scale: float = 0.01,
             seed: int = 42
         ) -> np.ndarray:
-        self,
-        target_routes: Union[Dict[int, List[int]], List[List[int]], List[int]],
-        num_vehicles: int,
-        noise_scale: float = 0.01,
-        seed: int = 42
-    ) -> np.ndarray:
+
         """
         Inicializa o vetor de parâmetros variacionais a partir de uma solução clássica (Warm-Start),
         aceitando target_routes nos formatos dict, lista de rotas ou lista simples de cidades.

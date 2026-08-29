@@ -1,6 +1,7 @@
+
 # graphs.py
 from pathlib import Path
-from typing import Union, List, Dict, Tuple, Optional
+from typing import Union, List, Dict, Tuple, Optional, Any
 import os
 import numpy as np
 import networkx as nx
@@ -8,6 +9,110 @@ import matplotlib.pyplot as plt
 
 # Importa o gerenciador de saída para direcionar figuras para 'result/'
 from logger import ExperimentLogger
+
+
+def plot_training_diagnostics(
+    vqe_res: Dict[str, Any],
+    exact_cost: float,
+    output_path: Path,
+    title_suffix: str = ""
+) -> Path:
+    """
+    Gera um painel com 4 gráficos de diagnóstico da otimização CV-VQE:
+      1. Curva de Convergência (Perda Contínua vs. Custo Discreto vs. Ground Truth)
+      2. Evolução dos Multiplicadores de Penalidade (lmbda_col e lmbda_cap)
+      3. Evolução das Violações de Restrições (Colisão e Capacidade)
+      4. Correlação de Spearman Móvel (Alinhamento Contínuo-Discreto)
+    """
+    loss_history = vqe_res.get("continuous_loss_history", [])
+    cost_history = vqe_res.get("cost_history", [])
+    metrics_history = vqe_res.get("metrics_history", [])
+    steps = np.arange(len(loss_history))
+
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f"Diagnóstico de Otimização CV-VQE {title_suffix}", fontsize=14, fontweight='bold')
+
+    # --- Painel 1: Convergência Dual-Axis ---
+    ax1 = axs[0, 0]
+    color_loss = 'tab:blue'
+    ax1.set_xlabel('Iteração', fontsize=10)
+    ax1.set_ylabel('Perda Contínua (Loss)', color=color_loss, fontsize=10)
+    ax1.plot(steps, loss_history, color=color_loss, linewidth=1.8, label='Perda Contínua (Loss)')
+    ax1.tick_params(axis='y', labelcolor=color_loss)
+    ax1.grid(True, linestyle=':', alpha=0.6)
+
+    ax1_twin = ax1.twinx()
+    color_cost = 'tab:green'
+    ax1_twin.set_ylabel('Custo Discreto', color=color_cost, fontsize=10)
+    ax1_twin.plot(steps, cost_history, color=color_cost, linestyle='--', linewidth=1.5, alpha=0.85, label='Custo Discreto')
+    ax1_twin.axhline(y=exact_cost, color='red', linestyle=':', label=f'Exato ({exact_cost:.2f})')
+    ax1_twin.tick_params(axis='y', labelcolor=color_cost)
+    
+    lines_1, labels_1 = ax1.get_legend_handles_labels()
+    lines_2, labels_2 = ax1_twin.get_legend_handles_labels()
+    ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper right', fontsize=8)
+    ax1.set_title("1. Convergência da Função de Custo", fontsize=11)
+
+    # --- Painel 2: Evolução das Penalidades (lmbda_col e lmbda_cap) ---
+    ax2 = axs[0, 1]
+    lmbda_col = [m.get("lmbda_col", 1.0) for m in metrics_history]
+    lmbda_cap = [m.get("lmbda_cap", 1.0) for m in metrics_history]
+
+    if lmbda_col and lmbda_cap:
+        ax2.plot(steps, lmbda_col, color='purple', linewidth=1.8, label='lambda_col (Colisão)')
+        ax2.plot(steps, lmbda_cap, color='orange', linewidth=1.8, linestyle='--', label='lambda_cap (Capacidade)')
+        ax2.set_yscale('log')
+        ax2.set_xlabel('Iteração', fontsize=10)
+        ax2.set_ylabel('Valor da Penalidade (Escala Log)', fontsize=10)
+        ax2.grid(True, linestyle=':', alpha=0.6)
+        ax2.legend(loc='upper left', fontsize=8)
+    ax2.set_title("2. Ajuste Dinâmico de Penalidades (Scheduler)", fontsize=11)
+
+    # --- Painel 3: Violações das Restrições ---
+    ax3 = axs[1, 0]
+    col_violations = [m.get("collision_penalty", 0.0) for m in metrics_history]
+    cap_violations = [m.get("capacity_violation_magnitude", 0.0) for m in metrics_history]
+
+    if col_violations and cap_violations:
+        ax3.plot(steps, col_violations, color='crimson', linewidth=1.5, label='Violação de Colisão')
+        ax3.plot(steps, cap_violations, color='darkorange', linewidth=1.5, linestyle='-.', label='Violação de Capacidade')
+        ax3.set_xlabel('Iteração', fontsize=10)
+        ax3.set_ylabel('Magnitude da Violação', fontsize=10)
+        ax3.grid(True, linestyle=':', alpha=0.6)
+        ax3.legend(loc='upper right', fontsize=8)
+    ax3.set_title("3. Violação de Restrições no Tempo", fontsize=11)
+
+    # --- Painel 4: Correlação de Spearman Móvel ---
+    ax4 = axs[1, 1]
+    window = max(5, len(loss_history) // 10)
+    spearman_rolling = []
+    
+    for i in range(len(loss_history)):
+        start_idx = max(0, i - window + 1)
+        sub_loss = loss_history[start_idx:i+1]
+        sub_cost = cost_history[start_idx:i+1]
+        if len(sub_loss) > 2 and np.std(sub_loss) > 1e-8 and np.std(sub_cost) > 1e-8:
+            r_x = np.argsort(np.argsort(sub_loss))
+            r_y = np.argsort(np.argsort(sub_cost))
+            cov = np.cov(r_x, r_y)[0, 1]
+            corr = cov / (np.std(r_x) * np.std(r_y))
+            spearman_rolling.append(corr)
+        else:
+            spearman_rolling.append(0.0)
+
+    ax4.plot(steps, spearman_rolling, color='teal', linewidth=1.5, label='Spearman Móvel')
+    ax4.axhline(y=0.0, color='gray', linestyle='--', alpha=0.7)
+    ax4.set_xlabel('Iteração', fontsize=10)
+    ax4.set_ylabel('Coeficiente de Spearman', fontsize=10)
+    ax4.set_ylim(-1.1, 1.1)
+    ax4.grid(True, linestyle=':', alpha=0.6)
+    ax4.legend(loc='lower right', fontsize=8)
+    ax4.set_title("4. Alinhamento Perda Contínua vs. Custo Discreto", fontsize=11)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+    return output_path
 
 
 class GraphBuilder:
@@ -489,3 +594,4 @@ class GraphBuilder:
     def draw(self, filename: str = "graph.png") -> Path:
         prefix = filename.replace(".png", "")
         return self.plot_original_graph(prefix=prefix)
+
