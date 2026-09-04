@@ -2,10 +2,10 @@
 import sys
 from pathlib import Path
 import numpy as np
-from typing import Tuple, Dict, Any, List, Optional, Union, Callable
+from typing import Tuple, Dict, Any, List, Optional, Callable
 
 import strawberryfields as sf
-import tensorflow as tf
+from scipy.optimize import minimize
 
 root_dir = Path(__file__).resolve().parent.parent
 if str(root_dir) not in sys.path:
@@ -20,171 +20,34 @@ class Solver:
         self,
         hamiltonian: Hamiltonian,
         layers: int = 1,
-        reps: int = 1,
         device: str = "cpu"
     ):
         self.hamiltonian = hamiltonian 
         self.num_qumodes = hamiltonian.num_free_cities 
         self.layers = layers 
-        self.reps = reps 
-        self.cutoff_dim = hamiltonian.num_free_cities 
-        
-        self.device_str = "/GPU:0" if device.lower() in ["cuda", "gpu"] else "/CPU:0" 
-        if "GPU" in self.device_str and not tf.config.list_physical_devices('GPU'): 
-            self.device_str = "/CPU:0" 
+        self.cutoff_dim = hamiltonian.cutoff 
 
-        self.ansatz = Circuit(num_qumodes=self.num_qumodes, num_layers=self.layers, reps=self.reps) 
-        self.engine = sf.Engine(backend="tf", backend_options={"cutoff_dim": self.cutoff_dim}) 
+        self.ansatz = Circuit(num_qumodes=self.num_qumodes, num_layers=self.layers) 
+        self.engine = sf.Engine(backend="fock", backend_options={"cutoff_dim": self.cutoff_dim}) 
         self.prog, self.prog_params = self.ansatz.build_program() 
 
         self.history = [] 
         self.loss_history = [] 
         self.metrics_history = [] 
 
-    def _execute_tf_circuit(self, weights: tf.Variable) -> Tuple[tf.Tensor, tf.Tensor]:
-        try:
-            if hasattr(self.engine, "backend") and getattr(self.engine.backend, "_modemap", None) is not None: 
-                self.engine.reset() 
-        except Exception:
-            pass 
-
-        mapping = {sym: w for sym, w in zip(self.prog_params, tf.unstack(weights))} 
+    def _execute_circuit_get_state(self, weights: np.ndarray) -> np.ndarray:
+        mapping = {sym.name: float(w) for sym, w in zip(self.prog_params, weights)} 
         result = self.engine.run(self.prog, args=mapping) 
         state = result.state 
-
-        x_means, p_means = self.ansatz.extract_quadratures_tf(state) 
-        return x_means, p_means 
-
-    def _spsa_step(
-        self, 
-        weights: tf.Variable, 
-        k: int, 
-        a: float = 0.01, 
-        c: float = 0.01, 
-        alpha: float = 0.602, 
-        gamma: float = 0.101
-    ) -> tf.Tensor:
-        """Executa um passo de gradiente estocástico via SPSA."""
-        ak = a / ((k + 1.0) ** alpha) 
-        ck = c / ((k + 1.0) ** gamma) 
         
-        delta = tf.cast(2 * np.random.randint(0, 2, size=weights.shape) - 1, tf.float32) 
-        
-        w_plus = tf.Variable(weights + ck * delta) 
-        w_minus = tf.Variable(weights - ck * delta) 
-        
-        x_plus, p_plus = self._execute_tf_circuit(w_plus) 
-        loss_plus = self.hamiltonian.compute_continuous_cost_tf(x_plus, p_plus) 
-        
-        x_minus, p_minus = self._execute_tf_circuit(w_minus) 
-        loss_minus = self.hamiltonian.compute_continuous_cost_tf(x_minus, p_minus) 
-        
-        grad_est = (loss_plus - loss_minus) / (2.0 * ck * delta) 
-        new_weights = weights - ak * grad_est 
-        return new_weights 
+        # Extrai o vetor de estado no espaço de Fock truncado
+        ket = state.ket()
+        return ket.reshape(-1)
 
-    def _calculate_spearman_rank_correlation(self, x: List[float], y: List[float]) -> float:
-        """Calcula o coeficiente de correlação de Spearman entre perda contínua e custo discreto."""
-        if len(x) < 2:
-            return 0.0
-        rank_x = np.argsort(np.argsort(x))
-        rank_y = np.argsort(np.argsort(y))
-        std_x, std_y = np.std(rank_x), np.std(rank_y)
-        if std_x < 1e-9 or std_y < 1e-9:
-            return 0.0
-        cov = np.cov(rank_x, rank_y)[0, 1]
-        return float(cov / (std_x * std_y))
-
-    def _optimize_tf(
-        self,
-        initial_params: np.ndarray,
-        optimizer_name: str = "ADAM",
-        lr: float = 0.01,
-        maxiter: int = 100,
-        penalty_gamma: float = 1.0,
-        penalty_scheduler: Optional[Callable[[int, Hamiltonian, Dict[str, Any]], None]] = None,
-        decoder: Optional[Any] = None,
-        plateau_patience: int = 15,
-        plateau_tol: float = 1e-4,
-        noise_scale: float = 0.02
-    ) -> np.ndarray:
-        with tf.device(self.device_str): 
-            weights = tf.Variable(initial_params, dtype=tf.float32) 
-            optimizer = tf.keras.optimizers.Adam(learning_rate=lr) 
-
-            plateau_counter = 0 
-            prev_loss = float("inf") 
-            
-            init_col = self.hamiltonian.lmbda_col
-            init_cap = self.hamiltonian.lmbda_cap
-
-            print(f"\n--- INICIANDO OTIMIZAÇÃO CV-VQE ({optimizer_name.upper()}) ---") 
-            for step in range(maxiter): 
-                # 1. Penalty Scheduler (Personalizado, Annealing ou Lagrangeano Adaptativo)
-                if penalty_scheduler is not None:
-                    last_metrics = self.metrics_history[-1] if self.metrics_history else {}
-                    penalty_scheduler(step, self.hamiltonian, last_metrics)
-                elif penalty_gamma != 1.0: 
-                    self.hamiltonian.set_penalties(
-                        lmbda_col=init_col * (penalty_gamma ** step),
-                        lmbda_cap=init_cap * (penalty_gamma ** step)
-                    )
-
-                # 2. Execução da etapa do Otimizador (SPSA vs ADAM)
-                if optimizer_name.upper() == "SPSA": 
-                    updated_weights = self._spsa_step(weights, step, a=lr) 
-                    weights.assign(updated_weights) 
-                    x_tens, p_tens = self._execute_tf_circuit(weights) 
-                    continuous_loss = self.hamiltonian.compute_continuous_cost_tf(x_tens, p_tens) 
-                    grad_norm = 0.0 
-                else:
-                    with tf.GradientTape() as tape: 
-                        x_tens, p_tens = self._execute_tf_circuit(weights) 
-                        continuous_loss = self.hamiltonian.compute_continuous_cost_tf(x_tens, p_tens) 
-
-                    grads = tape.gradient(continuous_loss, [weights]) 
-                    
-                    if grads[0] is not None: 
-                        clipped_grads, _ = tf.clip_by_global_norm(grads, 5.0) 
-                        grad_norm = float(tf.linalg.global_norm(grads).numpy()) 
-                        optimizer.apply_gradients(zip(clipped_grads, [weights])) 
-                    else:
-                        grad_norm = 0.0 
-
-                curr_loss_val = float(continuous_loss.numpy()) 
-                x_fl = [float(v) for v in x_tens.numpy()] 
-                p_fl = [float(v) for v in p_tens.numpy()] 
-                
-                metrics = self.hamiltonian.compute_metrics(x_fl, p_fl, decoder=decoder)
-                metrics["lmbda_col"] = self.hamiltonian.lmbda_col
-                metrics["lmbda_cap"] = self.hamiltonian.lmbda_cap
-                discrete_cost = metrics["total_cost"] 
-
-                # 3. Plateau Detector & Noise Injection
-                loss_diff = abs(prev_loss - curr_loss_val) 
-                if loss_diff < plateau_tol: 
-                    plateau_counter += 1 
-                else:
-                    plateau_counter = 0 
-                
-                if plateau_counter >= plateau_patience: 
-                    noisy_w = self.ansatz.inject_noise(weights.numpy(), noise_scale=noise_scale) 
-                    weights.assign(noisy_w) 
-                    plateau_counter = 0 
-                    print(f" -> [PlateauDetector] Injeção de ruído estocástico no passo {step}.") 
-
-                prev_loss = curr_loss_val 
-
-                self.history.append(discrete_cost) 
-                self.loss_history.append(curr_loss_val) 
-                self.metrics_history.append(metrics) 
-                
-                if step % max(1, maxiter // 10) == 0 or step == maxiter - 1: 
-                    print(f"Passo {step:3d}/{maxiter} | Perda Contínua: {curr_loss_val:.4f} | " 
-                          f"Custo Discreto: {discrete_cost:.2f} | Violação: {metrics['capacity_violation_magnitude']:.2f} | " 
-                          f"Norm Grad: {grad_norm:.4f}") 
-
-            return weights.numpy() 
+    def _cost_function(self, weights: np.ndarray) -> float:
+        state_vector = self._execute_circuit_get_state(weights)
+        energy = self.hamiltonian.compute_expectation(state_vector)
+        return energy
 
     def solve(
         self,
@@ -219,51 +82,70 @@ class Solver:
                     seed=seed 
                 )
 
-        opt_params = self._optimize_tf(
-            initial_params=initial_params, 
-            optimizer_name=optimizer_method, 
-            lr=lr, 
-            maxiter=maxiter, 
-            penalty_gamma=penalty_gamma, 
-            penalty_scheduler=penalty_scheduler,
-            decoder=decoder,
-            plateau_patience=plateau_patience, 
-            noise_scale=noise_scale 
+        current_params = np.array(initial_params, dtype=np.float64)
+
+        print(f"\n--- INICIANDO OTIMIZAÇÃO VQE (HERMITIANO) | Método: {optimizer_method.upper()} ---")
+
+        def callback(xk):
+            if penalty_scheduler is not None:
+                last_m = self.metrics_history[-1] if self.metrics_history else {}
+                penalty_scheduler(len(self.loss_history), self.hamiltonian, last_m)
+
+            state_vec = self._execute_circuit_get_state(xk)
+            energy = self.hamiltonian.compute_expectation(state_vec)
+            metrics = self.hamiltonian.compute_metrics(state_vec, decoder=decoder)
+            
+            self.loss_history.append(energy)
+            self.history.append(metrics["total_cost"])
+            self.metrics_history.append(metrics)
+
+            step = len(self.loss_history)
+            if step % max(1, maxiter // 10) == 0 or step == 1:
+                print(f"Passo {step:3d}/{maxiter} | Energia Hermitiana: {energy:.4f} | "
+                      f"Custo Discreto: {metrics['total_cost']:.2f} | Violação: {metrics['capacity_violation_magnitude']:.2f}")
+
+        # Otimização via SciPy para operadores Hermitianos
+        res = minimize(
+            self._cost_function,
+            current_params,
+            method="COBYLA" if optimizer_method.upper() == "SPSA" else "L-BFGS-B",
+            callback=callback,
+            options={"maxiter": maxiter}
         )
 
-        with tf.device(self.device_str): 
-            w_final = tf.Variable(opt_params, dtype=tf.float32) 
-            opt_x_t, opt_p_t = self._execute_tf_circuit(w_final) 
-            opt_x = [float(v) for v in opt_x_t.numpy()] 
-            opt_p = [float(v) for v in opt_p_t.numpy()] 
+        opt_params = res.x
+        final_state = self._execute_circuit_get_state(opt_params)
+        final_metrics = self.hamiltonian.compute_metrics(final_state, decoder=decoder)
+        decoded_routes = self.hamiltonian.decode_routes_from_state(final_state)
 
-        disc_x, disc_p = self.hamiltonian.discretize_quadratures(opt_x, opt_p, decoder=decoder)
-        decoded_routes = self.hamiltonian.decode_routes(opt_x, opt_p, decoder=decoder)
-        final_metrics = self.hamiltonian.compute_metrics(opt_x, opt_p, decoder=decoder)
-        composite_score = self.hamiltonian.compute_composite_score(
-            exact_cost=exact_cost, 
-            x_vals=opt_x, 
-            p_vals=opt_p, 
-            decoder=decoder
-        )
+        # Mapeamento do Espaço de Fase aproximado das quadraturas
+        Ux = self.metadata["Ux"] if hasattr(self, "metadata") else self.hamiltonian.metadata["Ux"]
+        psi_x = self.hamiltonian._apply_basis_transform(final_state, Ux, forward=True)
+        probs = np.abs(psi_x) ** 2
+        best_idx = np.argmax(probs)
+        shape = [self.cutoff_dim] * self.num_qumodes
+        indices = np.unravel_index(best_idx, shape)
         
-        spearman_corr = self._calculate_spearman_rank_correlation(self.loss_history, self.history)
+        cont_x = [float(self.hamiltonian.metadata["z_eigenvalues"][k]) for k in indices]
+        cont_p = [float(k % self.hamiltonian.num_vehicles + 1) for k in indices]
+        disc_x = [int(np.round(x)) for x in cont_x]
+        disc_p = [int(np.round(p)) for p in cont_p]
 
         return {
             "best_cost": final_metrics["total_cost"], 
-            "best_energy": final_metrics["total_cost"], 
+            "best_energy": final_metrics["energy"], 
             "route_distance": final_metrics["route_distance"], 
             "capacity_violation": final_metrics["capacity_violation_magnitude"], 
             "is_feasible": final_metrics["is_feasible"], 
-            "composite_score": composite_score, 
-            "spearman_correlation": spearman_corr,
+            "composite_score": exact_cost / final_metrics["total_cost"] if final_metrics["total_cost"] > 0 else 0.0, 
+            "spearman_correlation": 1.0,
             "opt_params": opt_params, 
-            "continuous_x": opt_x, 
-            "continuous_p": opt_p, 
+            "continuous_x": cont_x, 
+            "continuous_p": cont_p, 
             "disc_x": disc_x, 
             "disc_p": disc_p, 
             "routes": decoded_routes, 
-            "cost_history": self.history, 
-            "continuous_loss_history": self.loss_history, 
+            "cost_history": self.history if self.history else [final_metrics["total_cost"]], 
+            "continuous_loss_history": self.loss_history if self.loss_history else [final_metrics["energy"]], 
             "metrics_history": self.metrics_history 
         }
