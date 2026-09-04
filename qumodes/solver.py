@@ -82,7 +82,7 @@ class Solver:
                     seed=seed 
                 )
 
-        current_params = np.array(initial_params, dtype=np.float64)
+        current_params = np.array(initial_params, dtype=np.float32)
 
         print(f"\n--- INICIANDO OTIMIZAÇÃO VQE (HERMITIANO) | Método: {optimizer_method.upper()} ---")
 
