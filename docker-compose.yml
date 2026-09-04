@@ -6,7 +6,7 @@ services:
       args:
         - BASE_IMAGE=tensorflow/tensorflow:2.15.0-gpu
     # Mapeia para usar o seu usuário atual do servidor (ex: 1000:1000)
-    user: "${UID:-1025}:${GID:-1025}"
+    user: "${UID:-1000}:${GID:-1000}"
     volumes:
       - .:/workspace:cached
     command: python main.py

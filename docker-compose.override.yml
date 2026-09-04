@@ -3,7 +3,7 @@ services:
     volumes:
         - .:/workspace:cached
         - /home-ext/clovis:/home-ext/clovis
-   
+    user: "${UID:-1025}:${GID:-1025}"
     deploy:
       resources:
         # 2. LIMITES DE CPU E RAM (Impede o container de travar a máquina)
