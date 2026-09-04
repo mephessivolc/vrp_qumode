@@ -177,13 +177,46 @@ def run(
 
 
 if __name__ == "__main__":
-    run(
-        n_cities=5,
-        num_vehicles=3,
-        vehicle_capacity=8.0,
-        cutoff=4,
-        maxiter=5,
-        use_warm_start=False,
-        seed=42,
-        save_outputs=False
-    )
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+    import tensorflow as tf
+
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            print(e)
+
+    from itertools import product
+
+    maxiter = 50
+
+    # Bateria de Testes Comparações: Warm-Start vs Cold-Start (Random) com Decodificadores e Schedulers
+    cities = [3]
+    vehicles = [2]
+    optimizers = ["ADAM"]
+    decoders = ["hungarian", "argmax"]
+    schedulers = ["augmented_lagrangian", "exponential"]
+
+    for c, v, opt, dec, sched in product(cities, vehicles, optimizers, decoders, schedulers):
+        run(
+            n_cities=c,
+            num_vehicles=v,
+            vehicle_capacity=8.0,
+            demand_range=(1.0, 4.0),
+            layers=2,
+            maxiter=maxiter,
+            optimizer_method=opt,
+            decoder_name=dec,
+            scheduler_name=sched,
+            use_warm_start=False,
+            penalty_gamma=1.02,
+            plateau_patience=12,
+            lr=0.01,
+            graph_type="random",
+            device="cuda",
+            seed=42,
+            save_outputs=True,
+            sub_folder="SCHEDULER_DECODER_BENCHMARK"
+        )
