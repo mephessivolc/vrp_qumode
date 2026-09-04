@@ -1,6 +1,6 @@
 # qumodes/hamiltonian.py
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union, Any
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 from scipy.sparse.linalg import LinearOperator
 
@@ -29,7 +29,7 @@ class Hamiltonian:
         demands: Optional[Union[List[float], np.ndarray]] = None,
         **kwargs
     ):
-        self.dist_matrix = np.array(dist_matrix, dtype=np.float32)
+        self.dist_matrix = np.array(dist_matrix, dtype=np.float64)
         self.num_nodes = len(self.dist_matrix)
         self.num_vehicles = num_vehicles
         self.num_free_cities = self.num_nodes - 1
@@ -47,17 +47,17 @@ class Hamiltonian:
 
         # Configuração de Demandas
         if demands is None:
-            self.demands = np.ones(self.num_nodes, dtype=np.float32)
+            self.demands = np.ones(self.num_nodes, dtype=np.float64)
             self.demands[0] = 0.0
         else:
-            self.demands = np.array(demands, dtype=np.float32)
+            self.demands = np.array(demands, dtype=np.float64)
             self.demands[0] = 0.0
 
         # Configuração de Capacidades
         if isinstance(vehicle_capacity, (float, int)):
-            self.capacities = np.full(self.num_vehicles, float(vehicle_capacity), dtype=np.float32)
+            self.capacities = np.full(self.num_vehicles, float(vehicle_capacity), dtype=np.float64)
         else:
-            self.capacities = np.array(vehicle_capacity, dtype=np.float32)
+            self.capacities = np.array(vehicle_capacity, dtype=np.float64)
 
         # Propriedades de retrocompatibilidade
         self.lmbda_col = self.params.lambda_col
@@ -87,7 +87,7 @@ class Hamiltonian:
         x_min: Optional[float] = None, 
         x_max: Optional[float] = None
     ) -> np.ndarray:
-        x = np.asarray(x, dtype=np.float32)
+        x = np.asarray(x, dtype=np.float64)
         if x_min is None:
             x_min = float(np.min(x))
         if x_max is None:
@@ -107,8 +107,8 @@ class Hamiltonian:
 
     # --- COMPONENTES DE ENERGIA ---
     def _soft_assignments(self, z: np.ndarray) -> np.ndarray:
-        z = np.asarray(z, dtype=np.float32)
-        centers = np.arange(1, self.num_vehicles * self.num_free_cities + 1, dtype=np.float32).reshape(
+        z = np.asarray(z, dtype=np.float64)
+        centers = np.arange(1, self.num_vehicles * self.num_free_cities + 1, dtype=np.float64).reshape(
             self.num_vehicles, self.num_free_cities
         )
         logits = -(z[:, None, None] - centers[None, :, :]) ** 2 / (2.0 * self.params.sigma_assign ** 2)
@@ -149,7 +149,7 @@ class Hamiltonian:
     def _gap_term(self, a: np.ndarray) -> float:
         n = np.sum(a, axis=0)
         prefix_before = np.cumsum(n, axis=1) - n
-        required_before = np.arange(self.num_free_cities, dtype=np.float32)[None, :]
+        required_before = np.arange(self.num_free_cities, dtype=np.float64)[None, :]
         return float(self.params.lambda_gap * np.sum(n[:, 1:] * (required_before[:, 1:] - prefix_before[:, 1:]) ** 2))
 
     def _vehicle_term(self, a: np.ndarray) -> float:
@@ -191,10 +191,10 @@ class Hamiltonian:
         shape = [self.cutoff] * self.num_free_cities
         hilbert_dim = self.cutoff ** self.num_free_cities
 
-        energy_grid = np.empty(shape, dtype=np.float32)
+        energy_grid = np.empty(shape, dtype=np.float64)
         for flat_idx in range(hilbert_dim):
             indices = np.unravel_index(flat_idx, shape)
-            z = np.array([z_eigs[k] for k in indices], dtype=np.float32)
+            z = np.array([z_eigs[k] for k in indices], dtype=np.float64)
             energy_grid[indices] = self.evaluate_energy_from_z(z)["total"]
 
         diagonal = energy_grid.reshape(-1)
@@ -246,7 +246,7 @@ class Hamiltonian:
         indices = np.unravel_index(best_idx, shape)
         
         z_eigs = self.metadata["z_eigenvalues"]
-        z_best = np.array([z_eigs[k] for k in indices], dtype=np.float32)
+        z_best = np.array([z_eigs[k] for k in indices], dtype=np.float64)
         a = self._soft_assignments(z_best)
         
         routes = {v: [0] for v in range(1, self.num_vehicles + 1)}
@@ -299,7 +299,7 @@ class Hamiltonian:
         return [int(np.round(x)) for x in x_vals], [int(np.round(p)) for p in p_vals]
 
     def decode_routes(self, x_vals: List[float], p_vals: List[float], decoder: Optional[Any] = None) -> Dict[int, List[int]]:
-        z_dummy = np.array(x_vals, dtype=np.float32)
+        z_dummy = np.array(x_vals, dtype=np.float64)
         a = self._soft_assignments(z_dummy)
         routes = {v: [0] for v in range(1, self.num_vehicles + 1)}
         for r in range(self.num_free_cities):
