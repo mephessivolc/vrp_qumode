@@ -1,10 +1,11 @@
-# utils.py
+from pathlib import Path
+from typing import Dict, List, Union
+import matplotlib.pyplot as plt
 import numpy as np
-from typing import Union, List, Dict
 
 
 def format_timespan(seconds: float) -> str:
-    """Converte um intervalo de tempo em segundos para representação humana."""
+    """Converte um intervalo de tempo em segundos para representação legível."""
     if seconds < 0:
         return "0.00 s"
     if seconds < 1.0:
@@ -17,13 +18,11 @@ def format_timespan(seconds: float) -> str:
     DAY = 86400
 
     secs = float(seconds)
-
     days, secs = divmod(secs, DAY)
     hours, secs = divmod(secs, HOUR)
     minutes, secs = divmod(secs, MINUTE)
 
     parts = []
-
     if days > 0:
         parts.append(f"{int(days)}d")
     if hours > 0:
@@ -38,52 +37,27 @@ def format_timespan(seconds: float) -> str:
     return " ".join(parts)
 
 
-def calculate_cost_from_matrix(
-    route: Union[List[int], Dict[int, List[int]]], 
-    dist_matrix: np.ndarray
-) -> float:
-    """
-    Calcula o custo total de uma rota (TSP ou VRP) a partir da matriz de distâncias.
-    Útil para validações cruzadas nas métricas do experimento.
-    """
-    total_cost = 0.0
-    
-    # Caso VRP (Dicionário de rotas por veículo)
-    if isinstance(route, dict):
-        for _, sub_route in route.items():
-            for i in range(len(sub_route) - 1):
-                u, v = sub_route[i], sub_route[i + 1]
-                total_cost += float(dist_matrix[u, v])
-        return round(total_cost, 2)
-
-    # Caso TSP (Lista simples de cidades)
-    full_route = list(route)
-    if full_route[0] != full_route[-1]:
-        full_route.append(full_route[0])  # Fecha o ciclo se necessário
-
-    for i in range(len(full_route) - 1):
-        u, v = full_route[i], full_route[i + 1]
-        total_cost += float(dist_matrix[u, v])
-
-    return round(total_cost, 2)
-
-
-def print_experiment_summary(
-    problem_type: str,
-    n_cities: int,
-    exact_cost: float,
-    exact_time: float,
-    quantum_cost: float,
-    quantum_time: float,
-    evals: int
+def plot_convergence(
+    metrics,
+    method: str,
+    fig_path_name: Union[str, Path] = "test_convergence",
 ):
-    """Exibe um resumo elegante do experimento no terminal."""
-    gap = ((quantum_cost - exact_cost) / exact_cost) * 100
-    print("\n" + "="*55)
-    print(f"      RESUMO DO EXPERIMENTO [{problem_type.upper()} - N={n_cities}]")
-    print("="*55)
-    print(f" • Custo Exato (Força Bruta): {exact_cost:.2f} ({format_timespan(exact_time)})")
-    print(f" • Custo Quântico (CV):  {quantum_cost:.2f} ({format_timespan(quantum_time)})")
-    print(f" • Desvio Relativo (GAP):     {gap:+.2f}%")
-    print(f" • Avaliações de Função (nfev): {evals}")
-    print("="*55 + "\n")
+    """Gera e salva a curva de convergência do VQE no caminho especificado pelo PathManager."""
+    fig_path = Path(fig_path_name)
+    if not fig_path.suffix:
+        fig_path = fig_path.with_suffix(".png")
+
+    fig_path.parent.mkdir(parents=True, exist_ok=True)
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(metrics.cost_history, label="Energia Total $\\langle H \\rangle$")
+    plt.xlabel("Iterações")
+    plt.ylabel("Energia")
+    plt.title(f"Curva de Convergência VQE ({method}) - CVRP")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+
+    plt.savefig(fig_path)
+    plt.close()
+    print(f"[Info] Gráfico de convergência salvo em: {fig_path}")
