@@ -32,7 +32,7 @@ class PathManager:
         target_path = ROOT_DIR / self.variable_type
 
         if self.sub_folder:
-            target_path = target_path / Path(self.sub_folder)
+            target_path = target_path / self.sub_folder
 
         if is_figure:
             target_path = target_path / "figures"

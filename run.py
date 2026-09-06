@@ -31,7 +31,7 @@ def run_experiment(
 ):
     # 1. Configuração do Gerenciador de Caminhos e Logger
     path = PathManager(variable_type="qumodes", sub_folder=sub_folder)
-    log_file_path = path.get_file_path(f"{exp_name}.log")
+    log_file_path = path.get_file_path(f"logs/{exp_name}.log")
     logger = setup_logger(name=exp_name, log_file=log_file_path)
 
     logger.info(f"=== Iniciando Experimento: {exp_name} ===")
