@@ -1,7 +1,35 @@
+import json
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Any, Dict, Union
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+class NumpyEncoder(json.JSONEncoder):
+    """Encoder customizado para converter objetos do NumPy em tipos nativos do Python."""
+
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
+def save_experiment_json(
+    data: Dict[str, Any], json_path: Union[str, Path]
+) -> None:
+    """Salva os resultados da simulação em um arquivo JSON formatado."""
+    target_path = Path(json_path)
+    if not target_path.suffix:
+        target_path = target_path.with_suffix(".json")
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(target_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, cls=NumpyEncoder, ensure_ascii=False)
 
 
 def format_timespan(seconds: float) -> str:
@@ -42,7 +70,7 @@ def plot_convergence(
     method: str,
     fig_path_name: Union[str, Path] = "test_convergence",
 ):
-    """Gera e salva a curva de convergência do VQE no caminho especificado pelo PathManager."""
+    """Gera e salva a curva de convergência do VQE no caminho especificado."""
     fig_path = Path(fig_path_name)
     if not fig_path.suffix:
         fig_path = fig_path.with_suffix(".png")
@@ -60,4 +88,3 @@ def plot_convergence(
 
     plt.savefig(fig_path)
     plt.close()
-    print(f"[Info] Gráfico de convergência salvo em: {fig_path}")

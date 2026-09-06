@@ -13,43 +13,37 @@ class PathManager:
         self.variable_type = str(variable_type).lower()
         self.sub_folder = str(sub_folder).lower() if sub_folder else None
 
-        # Definição do diretório raiz base
-        env_path = os.getenv("OUTPUT_DIR")
-        if env_path:
-            self.ROOT_DIR = Path(env_path)
-        elif Path("/home-ext/clovis").exists():
-            self.ROOT_DIR = Path("/home-ext/clovis/result")
-        else:
-            self.ROOT_DIR = Path(__file__).resolve().parent / "result"
-
-    def _get_path(self, is_result: bool = True) -> Path:
+        
+    def _get_path(self, is_figure: bool = False) -> Path:
         """
         Retorna o diretório base para saída de arquivos e cria automaticamente
         todas as pastas e subpastas informadas na hierarquia.
         """
-        base_dir = self.ROOT_DIR / self.variable_type
+
+        # Definição do diretório raiz base
+        env_path = os.getenv("OUTPUT_DIR")
+        if env_path:
+            ROOT_DIR = Path(env_path)
+        elif Path("/home-ext/clovis").exists():
+            ROOT_DIR = Path("/home-ext/clovis/results")
+        else:
+            ROOT_DIR = Path(__file__).resolve().parent / "results"
+
+        target_path = ROOT_DIR / self.variable_type
 
         if self.sub_folder:
-            base_dir = base_dir / Path(self.sub_folder)
+            target_path = target_path / Path(self.sub_folder)
 
-        category_folder = "data" if is_result else "figures"
-        target_path = base_dir / category_folder
+        if is_figure:
+            target_path = target_path / "figures"
 
         # Garante a criação de todo o caminho de diretórios
         target_path.mkdir(parents=True, exist_ok=True)
         return target_path
 
-    def get_images_path(self) -> Path:
-        """Retorna o caminho do diretório de figuras."""
-        return self._get_path(is_result=False)
-
-    def get_results_path(self) -> Path:
-        """Retorna o caminho do diretório de dados (CSV/JSON/NPY)."""
-        return self._get_path(is_result=True)
-
-    def get_file_path(self, filename: str, is_result: bool = True) -> Path:
+    def get_file_path(self, filename: str, is_figure: bool = False) -> Path:
         """Retorna o caminho completo para salvar um arquivo específico."""
-        folder = self._get_path(is_result=is_result)
+        folder = self._get_path(is_figure=is_figure)
         return folder / filename
 
 
@@ -62,10 +56,8 @@ if __name__ == "__main__":
         variable_type="qumodes", sub_folder="experimento_1/execucao_A"
     )
 
-    pasta_resultados = path_manager.get_results_path()
-    print(f"[OK] Pasta de resultados criada: {pasta_resultados}")
+    caminho_log = path_manager.get_file_path("execucao.log")
+    print(f"[OK] Caminho do log: {caminho_log}")
 
-    caminho_figura = path_manager.get_file_path(
-        "convergencia.png", is_result=False
-    )
-    print(f"[OK] Caminho da imagem pronto: {caminho_figura}")
+    caminho_figura = path_manager.get_file_path("convergencia.png", is_figure=True)
+    print(f"[OK] Caminho da imagem: {caminho_figura}")

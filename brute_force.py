@@ -1,7 +1,11 @@
-# core/brute_force.py
 import itertools
 from typing import Tuple, List, Dict, Union, Optional
 import numpy as np
+
+
+class InfeasibleProblemError(ValueError):
+    """Exceção lançada quando a instância do problema é inviável devido a restrições de capacidade."""
+    pass
 
 
 class BruteForce:
@@ -29,7 +33,34 @@ class BruteForce:
             self.capacities = [float(c) for c in capacities]
             
         self.demands = demands if demands is not None else [0.0] * self.num_nodes
-        
+
+        # Executa validações prévias de viabilidade
+        self._validate_feasibility_prechecks()
+
+    def _validate_feasibility_prechecks(self) -> None:
+        """Realiza verificações matemáticas rápidas de viabilidade antes de iniciar a busca exaustiva."""
+        if self.num_vehicles <= 1:
+            return
+
+        total_demand = float(sum(self.demands))
+        total_capacity = float(sum(self.capacities))
+        max_capacity = max(self.capacities) if self.capacities else 0.0
+
+        # 1. Demanda total do sistema excede a capacidade somada de todos os veículos
+        if total_demand > total_capacity:
+            raise InfeasibleProblemError(
+                f"[Erro de Inviabilidade] Demanda total ({total_demand:.1f}) "
+                f"supera a capacidade total combinada dos veículos ({total_capacity:.1f})."
+            )
+
+        # 2. Existe alguma cidade cuja demanda sozinha supera o maior veículo disponível
+        for node_idx, d in enumerate(self.demands):
+            if d > max_capacity:
+                raise InfeasibleProblemError(
+                    f"[Erro de Inviabilidade] Nó {node_idx} possui demanda ({d:.1f}) "
+                    f"superior à capacidade máxima de qualquer veículo ({max_capacity:.1f})."
+                )
+
     def calculate_path_cost(self, path: List[int]) -> float:
         """Calcula a soma das distâncias de uma sequência simples de nós [u1, u2, ..., un]."""
         cost = 0.0
@@ -56,13 +87,18 @@ class BruteForce:
 
     def solve(self) -> Tuple[float, Union[List[int], Dict[int, List[int]]]]:
         """
-        Executa a busca exaustiva. 
+        Executa a busca exaustiva.
 
         Returns
         -------
         Tuple[float, Union[List[int], Dict[int, List[int]]]]
             - Custo mínimo exato
             - Rota ideal (List para TSP, Dict para VRP com múltiplos veículos)
+            
+        Raises
+        ------
+        InfeasibleProblemError
+            Se nenhuma combinação de rotas for viável quanto às capacidades.
         """
         depot = 0
         cities = [i for i in range(self.num_nodes) if i != depot]
@@ -92,5 +128,12 @@ class BruteForce:
                 if is_feasible and total_cost < best_cost:
                     best_cost = total_cost
                     best_routes = current_solution[1] if self.num_vehicles == 1 else current_solution
+
+        # Se após testar todas as partições o custo continuar infinito
+        if best_cost == float('inf'):
+            raise InfeasibleProblemError(
+                f"[Erro de Inviabilidade] Nenhuma partição de rotas atende às restrições "
+                f"de capacidade dos veículos {self.capacities} para as demandas {list(self.demands)}."
+            )
 
         return float(best_cost), best_routes

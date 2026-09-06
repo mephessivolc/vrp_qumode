@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import time
-from typing import Dict, List
+from typing import Dict, List, Union
 import numpy as np
 from scipy.optimize import minimize
 import strawberryfields as sf
@@ -27,6 +27,7 @@ class SolverMetrics:
     cost_history: List[float]
     execution_time_seconds: float
     total_evaluations: int
+    best_routes: Union[List[int], Dict[int, List[int]]]
 
 
 class VQESolver:
@@ -70,6 +71,61 @@ class VQESolver:
 
         return total_cost
 
+    def _extract_routes(self, state) -> Union[List[int], Dict[int, List[int]]]:
+        """
+        Decodifica o estado quântico otimizado para extrair o vetor de melhores rotas.
+        Utiliza os valores esperados da quadratura de posição <x> de cada qumode para determinar a sequência de visitação.
+        """
+        x_means = []
+        for i in range(self.instance.C):
+            try:
+                x_val, _ = state.quad_expectation(i)
+            except Exception:
+                x_val = float(i)
+            x_means.append(x_val)
+
+        # Ordena as cidades (índices 1 a C) de acordo com o valor esperado x
+        ordered_cities = [
+            city_idx for _, city_idx in sorted(zip(x_means, range(1, self.instance.C + 1)))
+        ]
+
+        depot = 0
+        if self.instance.V == 1:
+            return [depot] + ordered_cities + [depot]
+
+        # Particiona a sequência entre V veículos com base na capacidade Q
+        routes = {}
+        city_ptr = 0
+        num_cities = len(ordered_cities)
+
+        for v_idx in range(1, self.instance.V + 1):
+            sub_route = []
+            curr_load = 0.0
+            cap = (
+                self.instance.Q[v_idx - 1]
+                if len(self.instance.Q) >= v_idx
+                else self.instance.Q[0]
+            )
+
+            while city_ptr < num_cities:
+                city = ordered_cities[city_ptr]
+                demand = (
+                    float(self.instance.demands[city - 1])
+                    if len(self.instance.demands) >= city
+                    else 0.0
+                )
+
+                if curr_load + demand <= cap or v_idx == self.instance.V:
+                    sub_route.append(city)
+                    curr_load += demand
+                    city_ptr += 1
+                else:
+                    break
+
+            routes[v_idx] = [depot] + sub_route + [depot]
+
+        return routes
+
     def solve(
         self,
         method: str = "COBYLA",
@@ -91,6 +147,12 @@ class VQESolver:
 
         elapsed_time = time.time() - start_time
 
+        # Executa o circuito final com os parâmetros otimizados para extrair o estado final e decodificar a rota
+        opt_prog = self.ansatz.build_program(res.x)
+        eng = sf.Engine("fock", backend_options={"cutoff_dim": self.cutoff})
+        final_results = eng.run(opt_prog)
+        best_routes = self._extract_routes(final_results.state)
+
         return SolverMetrics(
             optimal_theta=res.x,
             final_energy=float(res.fun),
@@ -98,4 +160,5 @@ class VQESolver:
             cost_history=self.cost_history,
             execution_time_seconds=elapsed_time,
             total_evaluations=len(self.cost_history),
+            best_routes=best_routes,
         )
