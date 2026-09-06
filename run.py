@@ -19,7 +19,8 @@ def run_experiment(
     V: int = 2,  # Número de Veículos
     max_iter: int = 5,
     num_layer: int = 2,
-    method: Optional[str] = "COBYLA",
+    method: Optional[str] = "ADAM",
+    lr: float = 0.01,  # Taxa de aprendizado para o otimizador ADAM
     Q_val: float = 8.0,  # Capacidade individual dos veículos
     h_params: Optional[HamiltonianParams] = None,
     is_warm_start: bool = True,
@@ -35,7 +36,9 @@ def run_experiment(
     logger = setup_logger(name=exp_name, log_file=log_file_path)
 
     logger.info(f"=== Iniciando Experimento: {exp_name} ===")
-    logger.info(f"Parâmetros: Cidades={C}, Veículos={V}, Capacidade={Q_val}, Seed={seed}")
+    logger.info(
+        f"Parâmetros: Cidades={C}, Veículos={V}, Método={method}, LR={lr}, Capacidade={Q_val}, Seed={seed}"
+    )
 
     results_payload = {
         "experiment_name": exp_name,
@@ -44,6 +47,7 @@ def run_experiment(
             "num_vehicles": V,
             "capacity": Q_val,
             "max_iter": max_iter,
+            "learning_rate": lr,
             "num_layer": num_layer,
             "method": method,
             "seed": seed,
@@ -129,7 +133,8 @@ def run_experiment(
     instance = ProblemInstance(C=C, V=V, D=D, demands=demands, Q=Q)
     circuit_config = CircuitConfig(num_qumodes=C, num_layers=num_layer)
 
-    logger.info("Iniciando otimização VQE...")
+    opt_method = method if method is not None else "ADAM"
+    logger.info(f"Iniciando otimização VQE utilizando o método {opt_method}...")
     solver = VQESolver(
         instance=instance,
         circuit_config=circuit_config,
@@ -137,8 +142,7 @@ def run_experiment(
         cutoff=8,
     )
 
-    opt_method = method if method is not None else "COBYLA"
-    metrics = solver.solve(method=opt_method, maxiter=max_iter)
+    metrics = solver.solve(method=opt_method, maxiter=max_iter, lr=lr)
 
     # 5. Cálculo das Métricas Finais e Persistência dos Dados
     gap = ((metrics.final_energy - bf_best_cost) / bf_best_cost) * 100

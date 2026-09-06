@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import time
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 import numpy as np
 from scipy.optimize import minimize
 import strawberryfields as sf
@@ -71,6 +71,54 @@ class VQESolver:
 
         return total_cost
 
+    def _compute_numerical_gradient(
+        self, theta: np.ndarray, eps: float = 1e-4
+    ) -> np.ndarray:
+        """Calcula o gradiente numérico via diferença finita central."""
+        grad = np.zeros_like(theta)
+        for i in range(len(theta)):
+            theta_plus = theta.copy()
+            theta_minus = theta.copy()
+
+            theta_plus[i] += eps
+            theta_minus[i] -= eps
+
+            c_plus = self._cost_function(theta_plus)
+            c_minus = self._cost_function(theta_minus)
+
+            grad[i] = (c_plus - c_minus) / (2.0 * eps)
+        return grad
+
+    def _adam_optimize(
+        self,
+        initial_theta: np.ndarray,
+        maxiter: int = 200,
+        lr: float = 0.01,
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        eps_adam: float = 1e-8,
+    ) -> np.ndarray:
+        """Executa a otimização ADAM utilizando gradientes por diferenças finitas."""
+        theta = initial_theta.copy()
+        m = np.zeros_like(theta)
+        v = np.zeros_like(theta)
+
+        self._cost_function(theta)
+
+        for t in range(1, maxiter + 1):
+            grad = self._compute_numerical_gradient(theta)
+
+            m = beta1 * m + (1.0 - beta1) * grad
+            v = beta2 * v + (1.0 - beta2) * (grad**2)
+
+            m_hat = m / (1.0 - beta1**t)
+            v_hat = v / (1.0 - beta2**t)
+
+            theta = theta - lr * m_hat / (np.sqrt(v_hat) + eps_adam)
+            self._cost_function(theta)
+
+        return theta
+
     def _extract_routes(self, state) -> Union[List[int], Dict[int, List[int]]]:
         """
         Decodifica o estado quântico otimizado para extrair o vetor de melhores rotas.
@@ -128,9 +176,10 @@ class VQESolver:
 
     def solve(
         self,
-        method: str = "COBYLA",
+        method: str = "ADAM",
         maxiter: int = 200,
-        initial_theta: np.ndarray = None,
+        lr: float = 0.01,
+        initial_theta: Optional[np.ndarray] = None,
     ) -> SolverMetrics:
         if initial_theta is None:
             initial_theta = self.ansatz.generate_initial_theta()
@@ -138,24 +187,34 @@ class VQESolver:
         self.cost_history = []
         start_time = time.time()
 
-        res = minimize(
-            fun=self._cost_function,
-            x0=initial_theta,
-            method=method,
-            options={"maxiter": maxiter, "disp": False},
-        )
+        if method.upper() == "ADAM":
+            optimal_theta = self._adam_optimize(
+                initial_theta=initial_theta,
+                maxiter=maxiter,
+                lr=lr,
+            )
+            final_energy = self.cost_history[-1] if self.cost_history else float("inf")
+        else:
+            res = minimize(
+                fun=self._cost_function,
+                x0=initial_theta,
+                method=method,
+                options={"maxiter": maxiter, "disp": False},
+            )
+            optimal_theta = res.x
+            final_energy = float(res.fun)
 
         elapsed_time = time.time() - start_time
 
         # Executa o circuito final com os parâmetros otimizados para extrair o estado final e decodificar a rota
-        opt_prog = self.ansatz.build_program(res.x)
+        opt_prog = self.ansatz.build_program(optimal_theta)
         eng = sf.Engine("fock", backend_options={"cutoff_dim": self.cutoff})
         final_results = eng.run(opt_prog)
         best_routes = self._extract_routes(final_results.state)
 
         return SolverMetrics(
-            optimal_theta=res.x,
-            final_energy=float(res.fun),
+            optimal_theta=optimal_theta,
+            final_energy=final_energy,
             energy_components=self.last_energy_components,
             cost_history=self.cost_history,
             execution_time_seconds=elapsed_time,
