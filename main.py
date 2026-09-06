@@ -2,13 +2,13 @@ from itertools import product
 from run import run_experiment
 
 if __name__ == "__main__":
-    cities = [3]#,4,5]
-    vehicles = [1]#,2,3]
-    max_iter = 10
-    num_layers = [1]#,2,3]
-    is_warm_start = [True]#, False]
-    sub_folder = "experiment",
-    exp_name = "experiment_"
+    cities = [3,4,5]
+    vehicles = [1,2,3]
+    max_iter = 100
+    num_layers = [1,2,3]
+    is_warm_start = [True, False]
+    sub_folder = "experiment"
+    exp_name = "exp"
 
     sim = list(product(cities, vehicles, num_layers, is_warm_start))
     total = len(sim)

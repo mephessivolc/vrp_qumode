@@ -8,7 +8,7 @@ class PathManager:
     def __init__(
         self,
         variable_type: Union[str, Path] = "qumodes",
-        sub_folder: Optional[Union[str, Path]] = None,
+        sub_folder: Optional[Union[str, Path]] = None
     ):
         self.variable_type = str(variable_type).lower()
         self.sub_folder = str(sub_folder).lower() if sub_folder else None
