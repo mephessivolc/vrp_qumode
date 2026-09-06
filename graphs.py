@@ -155,7 +155,7 @@ class Graph:
                 weight="bold",
             )
 
-        plt.title(f"Grafo Original - {self.C} Cidades", fontsize=12)
+        plt.title(f"Grafo Original - {self.C} Cidades {self.V} Veículos", fontsize=12)
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.grid(True, linestyle=":", alpha=0.6)
@@ -249,7 +249,7 @@ class Graph:
 
             plt.plot([], [], color=color, lw=2, label=f"Veículo {v_id}")
 
-        plt.title(f"{title_prefix} - {self.C} Cidades", fontsize=12)
+        plt.title(f"{title_prefix} - {self.C} Cidades {self.V} Veículos", fontsize=12)
         plt.xlabel("X")
         plt.ylabel("Y")
         plt.grid(True, linestyle=":", alpha=0.6)
