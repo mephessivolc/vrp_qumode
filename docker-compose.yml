@@ -9,7 +9,7 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     volumes:
       - .:/workspace:cached
-    command: python main.py
+    command: python run.py
     # 1. Evita que o TensorFlow aloque toda a VRAM de uma vez
     environment:
       - TF_FORCE_GPU_ALLOW_GROWTH=true

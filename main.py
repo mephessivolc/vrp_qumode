@@ -2,11 +2,11 @@ from itertools import product
 from run import run_experiment
 
 if __name__ == "__main__":
-    cities = [3]#,4,5]
-    vehicles = [1]#,2,3]
-    num_layers = [1]#,2,3]
-    is_warm_start = [True]#, False]
-    max_iter = 10
+    cities = [3,4,5]
+    vehicles = [1,2,3]
+    num_layers = [1,2,3]
+    is_warm_start = [True, False]
+    max_iter = 100
     lr = 0.01
     sub_folder = "experiment"
     exp_name = "exp"

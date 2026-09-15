@@ -9,9 +9,9 @@ from path import PathManager
 
 from utils import format_timespan, plot_convergence, save_experiment_json
 
-from qumodes.ansatz import CircuitConfig
+from qumodes_old.ansatz import CircuitConfig
 from qumodes.hamiltonian import HamiltonianParams
-from qumodes.solver import ProblemInstance, VQESolver
+from qumodes_old.solver import ProblemInstance, VQESolver
 
 
 def run_experiment(
