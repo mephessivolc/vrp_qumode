@@ -19,3 +19,5 @@ services:
               # Se preferir escolher uma GPU específica que esteja livre (ex: GPU 0):
               # device_ids: ['0'] 
               capabilities: [ gpu ]
+    
+    command: python main.py

@@ -4,11 +4,11 @@ from run import run_experiment
 if __name__ == "__main__":
     cities = [3,4,5]
     vehicles = [1,2,3]
-    num_layers = [1,2,3]
-    is_warm_start = [True, False]
+    num_layers = [1,2]#,3]
+    is_warm_start = [True]#, False]
     max_iter = 100
     lr = 0.01
-    sub_folder = "experiment"
+    sub_folder = "experiment_Madani_Hamiltonian"
     exp_name = "exp"
 
     sim = list(product(cities, vehicles, num_layers, is_warm_start))
@@ -27,4 +27,6 @@ if __name__ == "__main__":
             is_warm_start = ws,
             sub_folder = sub_folder,
             exp_name = sim_name
-        )d
+        )
+
+        print("\n")
