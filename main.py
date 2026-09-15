@@ -14,9 +14,9 @@ if __name__ == "__main__":
     sim = list(product(cities, vehicles, num_layers, is_warm_start))
     num_exp = 0
     for city, vehicle, layer, ws in sim:
-        num_exp = str(num_exp + 1).zfill(4)
+        num_exp = num_exp + 1
         
-        sim_name = f"{exp_name}_{num_exp}"
+        sim_name = f"{exp_name}_{str(num_exp).zfill(4)}"
 
         run_experiment(
             C = city,
@@ -27,4 +27,4 @@ if __name__ == "__main__":
             is_warm_start = ws,
             sub_folder = sub_folder,
             exp_name = sim_name
-        )
+        )d
