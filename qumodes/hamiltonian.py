@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -44,7 +45,8 @@ import numpy as np
 __all__ = [
     # integração com solver.py / run.py
     "HamiltonianParams", "evaluate_sf_state", "extract_routes", "check_penalties",
-    "instance_from_legacy", "auto_positions", "clear_cache", "ZakEvaluator",
+    "instance_from_legacy", "auto_positions", "requires_all_vehicles", "vehicle_penalty_bound",
+    "clear_cache", "ZakEvaluator", "zak_grid_points", "get_max_grid_points", "set_max_grid_points",
     # núcleo do modelo
     "VRPInstance", "fejer", "quadratures_to_angles", "assignments", "hamiltonian_energy",
     "suggest_penalties", "decode", "routes_cost", "is_feasible",
@@ -80,7 +82,7 @@ class HamiltonianParams:
     alpha4: float = 1.0
     # --- pesos ---
     lambda_dist: float = 1.0
-    lambda_vehicle: float = 0.0   # > 0 exige usar todos os M veículos
+    lambda_vehicle: float = 0.0   # > 0: todos os M veículos são obrigatórios (como no BruteForce)
     lambda_disc: float = 5.0      # evita mínimos fracionários; confira com check_penalties
 
     def weights(self) -> Tuple[float, ...]:
@@ -568,36 +570,62 @@ def sample_from_distribution(dist: Dict[str, object], inst: VRPInstance, shots: 
 # ---------------------------------------------------------------------------
 # Integração com solver.py / run.py (Strawberry Fields, backend Fock)
 # ---------------------------------------------------------------------------
-_MAX_GRID_POINTS = 25_000_000
+_MAX_GRID_POINTS = int(os.environ.get("QUMODES_MAX_GRID_POINTS", 30_000_000))
 _EVALUATOR_CACHE: Dict[tuple, "ZakEvaluator"] = {}
 
 
-def auto_positions(N: int, M: int, demands: Optional[np.ndarray], Q: Optional[object]) -> int:
-    """Posições por veículo: nenhum veículo leva mais que floor(max Q / menor demanda) cidades."""
-    if demands is None or Q is None:
-        return N
-    d = np.asarray(demands, dtype=np.float64).reshape(-1)
-    if d.size == N + 1:
-        d = d[1:]
-    pos = d[d > 0]
-    if pos.size == 0:
-        return N
-    R = int(math.floor(float(np.max(Q)) / float(pos.min()) + 1e-9))
-    R = max(1, min(N, R))
+def auto_positions(N: int, M: int, demands: Optional[np.ndarray], Q: Optional[object],
+                   require_all_vehicles: bool = False) -> int:
+    """Posições por veículo (limites que valem para QUALQUER solução viável).
+
+    - capacidade: nenhum veículo leva mais que floor(max Q / menor demanda) cidades;
+    - todos os veículos obrigatórios: nenhum leva mais que N − M + 1 cidades.
+    Menos posições significam slots mais espaçados em x (melhor resolução por cutoff).
+    """
+    R = N
+    if demands is not None and Q is not None:
+        d = np.asarray(demands, dtype=np.float64).reshape(-1)
+        if d.size == N + 1:
+            d = d[1:]
+        pos = d[d > 0]
+        if pos.size:
+            R = min(R, int(math.floor(float(np.max(Q)) / float(pos.min()) + 1e-9)))
+    if require_all_vehicles and M > 1:
+        R = min(R, N - M + 1)
+    R = max(1, R)
     if M * R < N:           # instância inviável pela contagem; mantém N para não mascarar
         return N
     return R
 
 
+def requires_all_vehicles(params: Optional["HamiltonianParams"],
+                          require_all_vehicles: Optional[bool] = None) -> bool:
+    """Regra única do pacote: explícito se informado; senão, lambda_vehicle > 0."""
+    if require_all_vehicles is not None:
+        return bool(require_all_vehicles)
+    return bool(params is not None and params.lambda_vehicle > 0)
+
+
+def vehicle_penalty_bound(D: np.ndarray) -> float:
+    """λ_vehicle suficiente para que veículos vazios nunca compensem.
+
+    Toda solução com um veículo vazio pode ganhar esse veículo destacando uma
+    cidade x de uma rota com >= 2 cidades; o custo sobe no máximo
+    d(prev, next) + d(0, x) + d(x, 0) <= max d_ij + max d_0i + max d_i0.
+    """
+    D = np.asarray(D, dtype=np.float64)
+    return float(D[1:, 1:].max() + D[0, 1:].max() + D[1:, 0].max())
+
+
 def instance_from_legacy(N: int, M: int, D: np.ndarray, demands: Optional[np.ndarray] = None,
                          Q: Optional[object] = None, R: Optional[object] = "auto",
-                         hbar: float = 2.0) -> VRPInstance:
+                         hbar: float = 2.0, require_all_vehicles: bool = False) -> VRPInstance:
     """Constrói VRPInstance a partir dos argumentos usados por solver.py (N=C, M=V)."""
     D = np.asarray(D, dtype=np.float64)
     if D.shape != (N + 1, N + 1):
         raise ValueError(f"D deve ser ({N + 1}x{N + 1}) com o depósito no índice 0; recebido {D.shape}.")
     if R == "auto":
-        R = auto_positions(N, M, demands, Q)
+        R = auto_positions(N, M, demands, Q, require_all_vehicles)
     return VRPInstance(D=D, M=M, R=R, demands=demands, Q=Q, hbar=hbar)
 
 
@@ -624,7 +652,7 @@ class ZakEvaluator:
         self.Nc, self.G, x = _zak_grid(inst, self.cutoff, G, n_cells)
         self.points_per_mode = self.Nc * self.G
         total = self.points_per_mode ** inst.N
-        if total > _MAX_GRID_POINTS:
+        if total > get_max_grid_points():
             raise MemoryError(
                 f"Grade de Zak com {total:,} pontos (N={inst.N}, {self.points_per_mode} por modo). "
                 "Reduza G/cutoff ou o número de cidades; o método exato é viável para N <= 4.")
@@ -696,6 +724,22 @@ class ZakEvaluator:
         return T
 
 
+def get_max_grid_points() -> int:
+    return _MAX_GRID_POINTS
+
+
+def set_max_grid_points(n: int) -> None:
+    """Limite de pontos da grade de Zak (memória ~ 80 bytes por ponto no pico)."""
+    global _MAX_GRID_POINTS
+    _MAX_GRID_POINTS = int(n)
+
+
+def zak_grid_points(inst: VRPInstance, cutoff: int, G: int = 8) -> int:
+    """Número de pontos da grade de Zak usada por evaluate_sf_state."""
+    Nc, Gx, _ = _zak_grid(inst, int(cutoff), G, None)
+    return (Nc * Gx) ** inst.N
+
+
 def _get_evaluator(inst: VRPInstance, cutoff: int, G: int, n_cells: Optional[int]) -> ZakEvaluator:
     key = (_instance_key(inst), int(cutoff), int(G), n_cells)
     ev = _EVALUATOR_CACHE.get(key)
@@ -710,14 +754,15 @@ def clear_cache() -> None:
     _EVALUATOR_CACHE.clear()
 
 
-def _resolve_instance(N, M, D, demands, Q, inst, positions) -> VRPInstance:
+def _resolve_instance(N, M, D, demands, Q, inst, positions, require_all: bool = False) -> VRPInstance:
     if isinstance(N, VRPInstance):          # chamada nova: evaluate_sf_state(state, inst, ...)
         return N
     if inst is not None:
         return inst
     if N is None or M is None or D is None:
         raise ValueError("Informe N, M e D (ou uma VRPInstance).")
-    return instance_from_legacy(int(N), int(M), D, demands, Q, R=positions)
+    return instance_from_legacy(int(N), int(M), D, demands, Q, R=positions,
+                                require_all_vehicles=require_all)
 
 
 def _ket_of(state) -> np.ndarray:
@@ -755,7 +800,7 @@ def evaluate_sf_state(
     retornar ok=True, esse limite é o custo ótimo (GAP >= 0 no run.py).
     """
     params = params or HamiltonianParams()
-    instance = _resolve_instance(N, M, D, demands, Q, inst, positions)
+    instance = _resolve_instance(N, M, D, demands, Q, inst, positions, requires_all_vehicles(params))
     ket = _ket_of(state)
     ev = _get_evaluator(instance, ket.shape[0], G, n_cells)
     return ev.energy(ev.distribution(ket), params)
@@ -776,7 +821,7 @@ def extract_routes(
     mode: str = "best_sample",
     shots: int = 1000,
     seed: Optional[int] = 42,
-    require_all_vehicles: bool = False,
+    require_all_vehicles: Optional[bool] = None,
     G: int = 8,
     n_cells: Optional[int] = None,
     return_details: bool = False,
@@ -789,9 +834,12 @@ def extract_routes(
                               e devolve a viável de menor custo (como no Madani).
     mode = "most_probable" : configuração discreta de maior probabilidade.
     Se nenhuma amostra for viável, usa a mais provável.
+    require_all_vehicles=None segue a regra do pacote (lambda_vehicle > 0).
     """
     params = params or HamiltonianParams()
-    instance = _resolve_instance(N, M, D, demands, Q, inst, positions)
+    require_all_vehicles = requires_all_vehicles(params, require_all_vehicles)
+    instance = _resolve_instance(N, M, D, demands, Q, inst, positions,
+                                 requires_all_vehicles(params))
     ket = _ket_of(state)
     ev = _get_evaluator(instance, ket.shape[0], G, n_cells)
     S = instance.M * instance.R
@@ -839,7 +887,7 @@ def check_penalties(
     params: Optional[HamiltonianParams] = None,
     *,
     positions: object = "auto",
-    require_all_vehicles: bool = False,
+    require_all_vehicles: Optional[bool] = None,
     continuous_starts: int = 0,
     cutoff: Optional[int] = None,
     G: int = 8,
@@ -854,7 +902,9 @@ def check_penalties(
     evaluate_sf_state: é o limite inferior exato da energia reportada ao VQE.
     """
     params = params or HamiltonianParams()
-    instance = _resolve_instance(N, M, D, demands, Q, None, positions)
+    require_all_vehicles = requires_all_vehicles(params, require_all_vehicles)
+    instance = _resolve_instance(N, M, D, demands, Q, None, positions,
+                                 requires_all_vehicles(params))
     size = (instance.M * instance.R) ** instance.N
     if size > max_grid:
         raise MemoryError(f"(M·R)^N = {size:,} configurações; aumente max_grid ou reduza a instância.")
@@ -868,7 +918,8 @@ def check_penalties(
         d = decode(th[k], ph[k], instance)
         if is_feasible(d, instance, require_all_vehicles, use_cap):
             best_feasible = min(best_feasible, routes_cost(d["routes"], instance.D))
-    out = {"positions": instance.R, "grid_min_energy": float(E.min()),
+    out = {"positions": instance.R, "require_all_vehicles": require_all_vehicles,
+           "grid_min_energy": float(E.min()),
            "best_feasible_cost": best_feasible,
            "ok": bool(np.isclose(E.min(), best_feasible))}
     if continuous_starts > 0:
