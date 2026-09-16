@@ -9,9 +9,11 @@ from path import PathManager
 
 from utils import format_timespan, plot_convergence, save_experiment_json
 
-from qumodes_old.ansatz import CircuitConfig
-from qumodes.hamiltonian import HamiltonianParams
-from qumodes_old.solver import ProblemInstance, VQESolver
+# Todas as bibliotecas quânticas do MESMO pacote: o solver importa o
+# hamiltonian.py relativo ao próprio pacote (from .hamiltonian import ...).
+from qumodes.ansatz import CircuitConfig
+from qumodes.hamiltonian import HamiltonianParams, check_penalties
+from qumodes.solver import ProblemInstance, VQESolver
 
 
 def run_experiment(
@@ -128,7 +130,21 @@ def run_experiment(
             lambda_cap=0.0 if V == 1 else 18.0,
             alpha2=1.0,
             alpha4=1.0,
+            lambda_disc=5.0,
         )
+
+    # 4.1 Confere se a energia mínima do Hamiltoniano é o custo ótimo
+    penalty_check = check_penalties(
+        C, V, D, demands, Q, h_params, continuous_starts=50, cutoff=8
+    )
+    results_payload["penalty_check"] = penalty_check
+    logger.info(f"Checagem de penalidades: {penalty_check}")
+    if not penalty_check["ok"]:
+        logger.warning("Penalidades insuficientes: a energia pode ficar abaixo do ótimo "
+                       "(aumente lambda_col, lambda_gap, lambda_cap ou lambda_disc).")
+    if not np.isclose(penalty_check["best_feasible_cost"], bf_best_cost):
+        logger.warning("Ótimo da codificação difere do BruteForce: verifique a exigência de "
+                       "usar todos os veículos (lambda_vehicle) ou a convenção de D/demands.")
 
     instance = ProblemInstance(C=C, V=V, D=D, demands=demands, Q=Q)
     circuit_config = CircuitConfig(num_qumodes=C, num_layers=num_layer)

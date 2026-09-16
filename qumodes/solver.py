@@ -7,7 +7,7 @@ import strawberryfields as sf
 
 # Importações relativas internas do pacote qumodes
 from .ansatz import CircuitConfig, ContinuousVariableAnsatz
-from hamiltonian import HamiltonianParams, evaluate_sf_state
+from .hamiltonian import HamiltonianParams, evaluate_sf_state, extract_routes
 
 
 @dataclass
@@ -121,58 +121,20 @@ class VQESolver:
 
     def _extract_routes(self, state) -> Union[List[int], Dict[int, List[int]]]:
         """
-        Decodifica o estado quântico otimizado para extrair o vetor de melhores rotas.
-        Utiliza os valores esperados da quadratura de posição <x> de cada qumode para determinar a sequência de visitação.
+        Decodifica o estado otimizado pela codificação modular (x mod a -> posição,
+        p mod b -> veículo): sorteia configurações da distribuição de Zak e devolve
+        a rota viável de menor custo. Formato: lista (V == 1) ou dict {veículo: rota}.
         """
-        x_means = []
-        for i in range(self.instance.C):
-            try:
-                x_val, _ = state.quad_expectation(i)
-            except Exception:
-                x_val = float(i)
-            x_means.append(x_val)
-
-        # Ordena as cidades (índices 1 a C) de acordo com o valor esperado x
-        ordered_cities = [
-            city_idx for _, city_idx in sorted(zip(x_means, range(1, self.instance.C + 1)))
-        ]
-
-        depot = 0
-        if self.instance.V == 1:
-            return [depot] + ordered_cities + [depot]
-
-        # Particiona a sequência entre V veículos com base na capacidade Q
-        routes = {}
-        city_ptr = 0
-        num_cities = len(ordered_cities)
-
-        for v_idx in range(1, self.instance.V + 1):
-            sub_route = []
-            curr_load = 0.0
-            cap = (
-                self.instance.Q[v_idx - 1]
-                if len(self.instance.Q) >= v_idx
-                else self.instance.Q[0]
-            )
-
-            while city_ptr < num_cities:
-                city = ordered_cities[city_ptr]
-                demand = (
-                    float(self.instance.demands[city - 1])
-                    if len(self.instance.demands) >= city
-                    else 0.0
-                )
-
-                if curr_load + demand <= cap or v_idx == self.instance.V:
-                    sub_route.append(city)
-                    curr_load += demand
-                    city_ptr += 1
-                else:
-                    break
-
-            routes[v_idx] = [depot] + sub_route + [depot]
-
-        return routes
+        return extract_routes(
+            state=state,
+            N=self.instance.C,
+            M=self.instance.V,
+            D=self.instance.D,
+            demands=self.instance.demands,
+            Q=self.instance.Q,
+            cutoff=self.cutoff,
+            params=self.h_params,
+        )
 
     def solve(
         self,

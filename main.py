@@ -2,8 +2,8 @@ from itertools import product
 from run import run_experiment
 
 if __name__ == "__main__":
-    cities = [3,4,5]
-    vehicles = [1,2,3]
+    cities = [3,4]
+    vehicles = [1,2]
     num_layers = [1,2]#,3]
     is_warm_start = [True]#, False]
     max_iter = 100
