@@ -106,7 +106,9 @@ def run_experiment(
     max_iter: int = 5,
     num_layer: int = 2,
     method: Optional[str] = "ADAM",
-    lr: float = 0.01,  # Taxa de aprendizado para o otimizador ADAM
+    lr: float = 0.01,  # Taxa de aprendizado inicial do ADAM
+    lr_final: Optional[float] = None,  # se != None, decaimento cosseno lr -> lr_final
+    fd_eps: float = 1e-2,  # passo da diferença finita central
     Q_val: float = 8.0,  # Capacidade individual dos veículos
     h_params: Optional[HamiltonianParams] = None,
     is_warm_start: bool = True,
@@ -289,11 +291,11 @@ def run_experiment(
         logger.warning("Rótulos de parâmetros não conferem com o ansatz; usando índices.")
         labels = [f"p{k}" for k in range(n_params)]
     initial_theta = solver.ansatz.generate_initial_theta(seed=theta_seed)
-    fd_eps = _defaults_of(solver._compute_numerical_gradient).get("eps", 1e-4)
     payload["config"]["circuit"] = {"num_qumodes": C, "num_layers": num_layer,
                                     "params_per_layer": solver.ansatz.num_params_per_layer,
                                     "total_params": n_params, "parameter_labels": labels}
     payload["config"]["optimizer"] = {"method": opt_method, "max_iter": max_iter, "lr": lr,
+                                      "lr_final": lr_final,
                                       "finite_difference_eps": fd_eps,
                                       "adam_defaults": {k: v for k, v in _defaults_of(solver._adam_optimize).items()
                                                         if k not in ("maxiter", "lr")}}
@@ -302,6 +304,7 @@ def run_experiment(
     t0 = time.time()
     try:
         metrics = solver.solve(method=opt_method, maxiter=max_iter, lr=lr,
+                               lr_final=lr_final, fd_eps=fd_eps,
                                initial_theta=initial_theta)
     except (Exception, KeyboardInterrupt) as err:
         interrupted = isinstance(err, KeyboardInterrupt)
@@ -311,11 +314,16 @@ def run_experiment(
         payload["traceback"] = traceback.format_exc()
         history = list(solver.cost_history)
         payload["partial_quantum_solution"] = {
-            "cost_history": history, "total_evaluations": len(history),
+            "cost_history": history,
+            "circuit_evaluations": solver.circuit_evaluations,
+            "total_evaluations": solver.circuit_evaluations,
             "last_energy_components": solver.last_energy_components}
-        if opt_method.upper() == "ADAM":
-            payload["partial_quantum_solution"]["optimization_trace"] = \
-                A.reconstruct_adam_trace(history, n_params, fd_eps, labels)
+        if solver.iterate_history:
+            payload["partial_quantum_solution"]["optimization_trace"] = {
+                "iterations_completed": max(0, len(solver.iterate_history) - 1),
+                "energy_per_iteration": list(solver.iterate_history),
+                "grad_norm_per_iteration": list(solver.grad_norm_history),
+                "lr_per_iteration": list(solver.lr_history)}
         payload["timestamps"]["end"] = A.now_iso()
         timing["total"] = time.time() - t_start
         logger.error(f"VQE {payload['status']}: {err!r} — histórico parcial salvo.")
@@ -345,8 +353,15 @@ def run_experiment(
 
     trace = None
     convergence = None
-    if opt_method.upper() == "ADAM":
-        trace = A.reconstruct_adam_trace(metrics.cost_history, n_params, fd_eps, labels)
+    if metrics.iterate_history:
+        # Registro direto do solver: uma energia por iteração. Não se reconstrói
+        # mais o traço a partir de cost_history (que inclui as sondagens).
+        trace = {"iterations_completed": metrics.iterations_completed,
+                 "evaluations_per_iteration": metrics.evaluations_per_iteration,
+                 "energy_per_iteration": list(metrics.iterate_history),
+                 "grad_norm_per_iteration": list(metrics.grad_norm_history),
+                 "lr_per_iteration": list(metrics.lr_history),
+                 "circuit_evaluations": metrics.circuit_evaluations}
         convergence = A.convergence_summary(trace["energy_per_iteration"],
                                             trace["grad_norm_per_iteration"])
 
@@ -369,7 +384,9 @@ def run_experiment(
     energy_block = {
         "initial": e_initial,
         "final": e_final,
-        "best_evaluated": float(np.min(metrics.cost_history)) if metrics.cost_history else None,
+        "best_iterate": metrics.best_iterate_energy,
+        "best_iterate_index": metrics.best_iterate_index,
+        "best_evaluated_any": float(np.min(metrics.cost_history)) if metrics.cost_history else None,
         "optimum_c_star": c_star,
         "energy_gap_percent": _pct(e_final, c_star),
         "vacuum": baselines["vacuum"]["energy_components"]["total"],
@@ -445,6 +462,8 @@ def run_experiment(
         arrays = {"initial_theta": initial_theta, "optimal_theta": metrics.optimal_theta,
                   "ket_final": ket_final, "ket_initial": ket_initial,
                   "cost_history": np.asarray(metrics.cost_history),
+                  "iterate_history": np.asarray(metrics.iterate_history),
+                  "grad_norm_history": np.asarray(metrics.grad_norm_history),
                   "config_energy": space["energy"], "config_feasible": space["feasible"],
                   "config_cost": space["cost"], "config_optimal": space["optimal"]}
         if trace is not None:
@@ -459,7 +478,14 @@ def run_experiment(
     g.plot_solution_graph(metrics.best_routes, fig_vqe, title_prefix="Solução VQE")
     payload["artifacts"]["fig_vqe_route"] = fig_vqe
     fig_conv = path.get_file_path(f"{exp_name}_convergence.png", is_figure=True)
-    plot_convergence(metrics=metrics, method=opt_method, fig_path_name=fig_conv)
+    plot_convergence(metrics=metrics, method=opt_method, fig_path_name=fig_conv,
+                     c_star=c_star, uniform_energy=energy_block["uniform"],
+                     cutoff_floor=floor_value)
+    fig_conv_norm = path.get_file_path(f"{exp_name}_convergence_normalized.png", is_figure=True)
+    plot_convergence(metrics=metrics, method=opt_method, fig_path_name=fig_conv_norm,
+                     c_star=c_star, uniform_energy=energy_block["uniform"],
+                     cutoff_floor=floor_value, normalize=True)
+    payload["artifacts"]["fig_convergence_normalized"] = fig_conv_norm
     payload["artifacts"]["fig_convergence"] = fig_conv
     if trace is not None:
         fig_trace = path.get_file_path(f"{exp_name}_energy_per_iteration.png", is_figure=True)
@@ -499,6 +525,10 @@ def run_experiment(
             "p_feas_final": final_m["p_feasible"],
             "still_decreasing": None if convergence is None else convergence["still_decreasing"],
             "state_norm_final": final_m["state_norm"],
+            "iterations_completed": metrics.iterations_completed,
+            "circuit_evaluations": metrics.circuit_evaluations,
+            "evaluations_per_iteration": metrics.evaluations_per_iteration,
+            "best_iterate": metrics.best_iterate_energy,
             "total_evaluations": metrics.total_evaluations,
             "vqe_seconds": timing["vqe"], "total_seconds": timing["total"],
             "results_json": json_path,
