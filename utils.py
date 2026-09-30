@@ -115,7 +115,7 @@ def plot_convergence(
     use_grad = bool(show_grad_norm and grad and x_label == "Iteração")
 
     y = np.asarray(energy, dtype=float)
-    y_label = "Energia $\\langle H \\rangle$"
+    y_label = "Energy $\\langle H \\rangle$"
     refs = {}
     if normalize:
         if c_star is None or uniform_energy is None:
@@ -124,18 +124,18 @@ def plot_convergence(
         if abs(scale) < 1e-12:
             raise ValueError("uniform_energy coincide com c_star: instância sem contraste.")
         y = (y - float(c_star)) / scale
-        y_label = "Energia normalizada $(E - C^*)/(E_{unif} - C^*)$"
-        refs["Ótimo $C^*$"] = (0.0, "tab:green")
-        refs["Uniforme"] = (1.0, "tab:gray")
+        y_label = "Normalized Energy $(E - C^*)/(E_{unif} - C^*)$"
+        refs["Optimum $C^*$"] = (0.0, "tab:green")
+        refs["Uniform"] = (1.0, "tab:gray")
         if cutoff_floor is not None:
-            refs["Piso do cutoff"] = ((float(cutoff_floor) - float(c_star)) / scale, "tab:red")
+            refs["Cutoff Dimension"] = ((float(cutoff_floor) - float(c_star)) / scale, "tab:red")
     else:
         if c_star is not None:
-            refs["Ótimo $C^*$"] = (float(c_star), "tab:green")
+            refs["Optimum $C^*$"] = (float(c_star), "tab:green")
         if uniform_energy is not None:
-            refs["Uniforme"] = (float(uniform_energy), "tab:gray")
+            refs["Uniform"] = (float(uniform_energy), "tab:gray")
         if cutoff_floor is not None:
-            refs["Piso do cutoff"] = (float(cutoff_floor), "tab:red")
+            refs["Cutoff Dimension"] = (float(cutoff_floor), "tab:red")
 
     x = np.arange(y.size)
 
