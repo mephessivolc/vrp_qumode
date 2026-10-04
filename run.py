@@ -25,6 +25,8 @@ from brute_force import BruteForce, InfeasibleProblemError
 from graphs import Graph
 from logger import setup_logger
 from path import PathManager
+from initial_states import build_initial_kets, describe_kets
+import verify_encoding as VE
 
 from utils import format_timespan, plot_convergence, save_experiment_json
 
@@ -91,7 +93,7 @@ def _plot_energy_trace(energy, c_star, floor, vacuum, fig_path) -> bool:
 
 
 def _save_json(payload: Dict, path: PathManager, exp_name: str, logger) -> str:
-    json_path = path.get_file_path(f"{exp_name}_results.json")
+    json_path = path.get_file_path(f"{exp_name}.json", subdir="runs")
     save_experiment_json(A.to_jsonable(payload), json_path)
     logger.info(f"JSON salvo em: {json_path}")
     return json_path
@@ -125,8 +127,23 @@ def run_experiment(
     require_all_vehicles: Optional[bool] = None,
     compute_cutoff_floor: bool = False,
     save_state: bool = True,
-    summary_csv: Optional[str] = "experiments_summary.csv",
+    summary_csv: Optional[str] = "summary.csv",
     notes: str = "",
+    # --- codificação e estado inicial ---
+    R_positions: Optional[int] = None,     # posições por veículo; None = auto (R = C)
+    initial_state: str = "vacuum",         # vacuum | squeezed | gkp
+    use_kerr: bool = True,                 # False: circuito puramente gaussiano (ablação)
+    init_scale: float = 0.05,              # ruído da inicialização de theta
+    squeeze_r: float = 0.0,                # r inicial dos Sgate (0 = como antes)
+    gkp_delta: float = 0.35,
+    gkp_kappa: float = 4.0,
+    # --- rotulagem da varredura (vão para o summary.csv) ---
+    sweep: str = "",
+    instance_id: str = "",
+    # --- verificação da codificação ---
+    verify_encoding: bool = True,          # roda os cinco testes antes do VQE
+    abort_on_invalid_encoding: bool = True,  # não gasta VQE com codificação inválida
+    verify_max_sequences: int = VE.DEFAULT_MAX_SEQUENCES,
 ) -> Dict:
     t_start = time.time()
     timing: Dict[str, float] = {}
@@ -242,7 +259,9 @@ def run_experiment(
 
     # 4. Codificação e penalidades ------------------------------------------
     t0 = time.time()
-    inst = H.instance_from_legacy(C, V, D, demands, Q, require_all_vehicles=req_all)
+    inst = H.instance_from_legacy(C, V, D, demands, Q,
+                                  R=(R_positions if R_positions else "auto"),
+                                  require_all_vehicles=req_all)
     grid_points = H.zak_grid_points(inst, cutoff)
     payload["encoding"] = {"positions_per_vehicle": inst.R, "zak_grid_points": grid_points,
                            "zak_grid_limit": H.get_max_grid_points()}
@@ -280,17 +299,55 @@ def run_experiment(
         logger.warning("Ótimo da codificação difere do BruteForce: verifique lambda_vehicle "
                        "(veículos obrigatórios) ou a convenção de D/demands.")
 
+    # 4b. Verificação da codificação (conjuntos de rotas, não só energias) ----
+    verifier = None
+    enc_report = None
+    if verify_encoding:
+        t_ver = time.time()
+        verifier = VE.get_verifier(inst, require_all_vehicles=req_all,
+                                   use_capacity=h_params.lambda_cap > 0,
+                                   max_sequences=verify_max_sequences)
+        enc_report = verifier.verify(h_params, continuous_starts=penalty_continuous_starts,
+                                     logger=logger)
+        payload["encoding"]["verification"] = enc_report
+        timing["encoding_verification"] = time.time() - t_ver
+        if enc_report["passed"] is False and abort_on_invalid_encoding:
+            msg = ("Codificação inválida: o mínimo do Hamiltoniano não decodifica "
+                   "para uma rota ótima. Ajuste as penalidades antes de gastar VQE.")
+            logger.error(msg)
+            payload["status"] = "ENCODING_INVALID"
+            payload["error_message"] = msg
+            payload["timestamps"]["end"] = A.now_iso()
+            timing["total"] = time.time() - t_start
+            payload["timing_seconds"] = timing
+            _save_json(payload, path, exp_name, logger)
+            return payload
+
     # 5. VQE -----------------------------------------------------------------
     instance = ProblemInstance(C=C, V=V, D=D, demands=demands, Q=Q)
     circuit_config = CircuitConfig(num_qumodes=C, num_layers=num_layer)
+    init_kets = build_initial_kets(initial_state, N=C, cutoff=cutoff, R=inst.R,
+                                   hbar=inst.hbar, Delta=gkp_delta, kappa=gkp_kappa,
+                                   squeeze_r=squeeze_r or 1.2)
+    ket_info = describe_kets(init_kets)
+    if init_kets is not None and ket_info["max_truncation_loss"] > 1e-3:
+        logger.warning(f"Estado inicial '{initial_state}' perde "
+                       f"{ket_info['max_truncation_loss']:.2%} da norma no topo de Fock: "
+                       f"aumente o cutoff (atual {cutoff}).")
     solver = VQESolver(instance=instance, circuit_config=circuit_config,
-                       hamiltonian_params=h_params, cutoff=cutoff)
+                       hamiltonian_params=h_params, cutoff=cutoff,
+                       initial_ket=init_kets, use_kerr=use_kerr)
     n_params = solver.ansatz.total_params
     labels = A.parameter_labels(C, num_layer)
     if len(labels) != n_params:
         logger.warning("Rótulos de parâmetros não conferem com o ansatz; usando índices.")
         labels = [f"p{k}" for k in range(n_params)]
-    initial_theta = solver.ansatz.generate_initial_theta(seed=theta_seed)
+    initial_theta = solver.ansatz.generate_initial_theta(
+        seed=theta_seed, scale=init_scale, squeeze_r=squeeze_r)
+    payload["config"]["initial_state"] = {"kind": initial_state, "use_kerr": use_kerr,
+                                          "init_scale": init_scale, "squeeze_r": squeeze_r,
+                                          "gkp_delta": gkp_delta, "gkp_kappa": gkp_kappa,
+                                          **ket_info}
     payload["config"]["circuit"] = {"num_qumodes": C, "num_layers": num_layer,
                                     "params_per_layer": solver.ansatz.num_params_per_layer,
                                     "total_params": n_params, "parameter_labels": labels}
@@ -409,6 +466,13 @@ def run_experiment(
         "vacuum_same_protocol": {"routes": vacuum_routes, "cost": vacuum_info["cost"],
                                  "feasible": vacuum_info["feasible"]},
     }
+    if verifier is not None:
+        # Mais confiável que found_optimum: compara CONJUNTOS de rotas, de modo
+        # que empate numérico com uma rota diferente não passa por ótimo.
+        route_block.update(verifier.audit_routes(routes))
+        vac_audit = verifier.audit_routes(vacuum_routes)
+        route_block["vacuum_same_protocol"]["route_in_optimal_set"] = \
+            vac_audit["route_in_optimal_set"]
     payload["analysis"] = {
         "energy": energy_block,
         "routes": route_block,
@@ -429,8 +493,8 @@ def run_experiment(
         "total_evaluations": metrics.total_evaluations,
         "execution_time_seconds": metrics.execution_time_seconds,
         "best_routes": metrics.best_routes,
+        "cost_history_in_npz": True,
         "energy_components": metrics.energy_components,
-        "cost_history": metrics.cost_history,
         "optimal_theta": metrics.optimal_theta,
         "initial_theta": initial_theta,
         "seconds_per_evaluation": (metrics.execution_time_seconds / metrics.total_evaluations
@@ -458,7 +522,7 @@ def run_experiment(
 
     # 8. Artefatos -----------------------------------------------------------
     if save_state:
-        npz_path = path.get_file_path(f"{exp_name}_state.npz")
+        npz_path = path.get_file_path(f"{exp_name}_state.npz", subdir="arrays")
         arrays = {"initial_theta": initial_theta, "optimal_theta": metrics.optimal_theta,
                   "ket_final": ket_final, "ket_initial": ket_initial,
                   "cost_history": np.asarray(metrics.cost_history),
@@ -495,7 +559,7 @@ def run_experiment(
 
     payload["timestamps"]["end"] = A.now_iso()
     timing["total"] = time.time() - t_start
-    json_path = path.get_file_path(f"{exp_name}_results.json")
+    json_path = path.get_file_path(f"{exp_name}.json", subdir="runs")
     csv_path = path.get_file_path(summary_csv) if summary_csv else None
     payload["artifacts"]["results_json"] = json_path
     if csv_path:
@@ -506,7 +570,10 @@ def run_experiment(
     if csv_path:
         A.append_summary_csv(csv_path, {
             "experiment_name": exp_name, "timestamp": payload["timestamps"]["end"],
+            "sweep": sweep, "instance_id": instance_id,
             "status": payload["status"], "C": C, "V": V, "Q": Q_val, "seed": seed,
+            "theta_seed": theta_seed, "initial_state": initial_state,
+            "use_kerr": use_kerr, "squeeze_r": squeeze_r, "init_scale": init_scale,
             "method": opt_method, "lr": lr, "max_iter": max_iter, "num_layer": num_layer,
             "n_params": n_params, "cutoff": cutoff, "positions_R": inst.R,
             "lambda_col": h_params.lambda_col, "lambda_gap": h_params.lambda_gap,
@@ -530,6 +597,27 @@ def run_experiment(
             "evaluations_per_iteration": metrics.evaluations_per_iteration,
             "best_iterate": metrics.best_iterate_energy,
             "total_evaluations": metrics.total_evaluations,
+            "rho": (final_m["p_optimal"] / baselines["uniform"]["p_optimal"]
+                    if baselines["uniform"]["p_optimal"] else None),
+            "rho_vacuum": (baselines["vacuum"]["p_optimal"] / baselines["uniform"]["p_optimal"]
+                           if baselines["uniform"]["p_optimal"] else None),
+            "p_feas_uniform": baselines["uniform"]["p_feasible"],
+            "expected_cost_given_feasible": final_m.get("expected_cost_given_feasible"),
+            "energy_normalized_final": ((e_final - c_star) / (energy_block["uniform"] - c_star)
+                                        if energy_block["uniform"] != c_star else None),
+            "h_disc_per_mode": (metrics.energy_components.get("disc", 0.0)
+                                / h_params.lambda_disc / C
+                                if h_params.lambda_disc else None),
+            "delta_dist": initial_m["energy_components"]["dist"] - final_m["energy_components"]["dist"],
+            "delta_disc": initial_m["energy_components"]["disc"] - final_m["energy_components"]["disc"],
+            "mean_photons_max": max(final_m["mean_photons_per_mode"]),
+            "grad_norm_final": (metrics.grad_norm_history[-1] if metrics.grad_norm_history else None),
+            **VE.summary_columns(enc_report),
+            "route_in_optimal_set": route_block.get("route_in_optimal_set"),
+            "num_optimal": enc_summary["num_optimal"],
+            "num_feasible": enc_summary["num_feasible"],
+            "cost_levels": len(enc_summary["feasible_cost_levels"]),
+            "zak_grid_points": grid_points,
             "vqe_seconds": timing["vqe"], "total_seconds": timing["total"],
             "results_json": json_path,
         })

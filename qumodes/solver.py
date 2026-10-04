@@ -78,6 +78,8 @@ class VQESolver:
         hamiltonian_params: HamiltonianParams,
         cutoff: int = 10,
         record_probes: bool = True,
+        initial_ket=None,
+        use_kerr: bool = True,
     ):
         self.instance = instance
         self.circuit_config = circuit_config
@@ -85,7 +87,9 @@ class VQESolver:
         self.cutoff = cutoff
         self.record_probes = record_probes
 
-        self.ansatz = ContinuousVariableAnsatz(config=circuit_config)
+        self.ansatz = ContinuousVariableAnsatz(config=circuit_config,
+                                               initial_ket=initial_ket,
+                                               use_kerr=use_kerr)
         self.cost_history: List[float] = []
         self.iterate_history: List[float] = []
         self.grad_norm_history: List[float] = []

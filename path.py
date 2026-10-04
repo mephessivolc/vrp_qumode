@@ -14,7 +14,7 @@ class PathManager:
         self.sub_folder = str(sub_folder).lower() if sub_folder else None
 
         
-    def _get_path(self, is_figure: bool = False) -> Path:
+    def _get_path(self, is_figure: bool = False, subdir: Optional[str] = None) -> Path:
         """
         Retorna o diretório base para saída de arquivos e cria automaticamente
         todas as pastas e subpastas informadas na hierarquia.
@@ -36,14 +36,23 @@ class PathManager:
 
         if is_figure:
             target_path = target_path / "figures"
+        elif subdir:
+            target_path = target_path / str(subdir)
 
         # Garante a criação de todo o caminho de diretórios
         target_path.mkdir(parents=True, exist_ok=True)
         return target_path
 
-    def get_file_path(self, filename: str, is_figure: bool = False) -> Path:
-        """Retorna o caminho completo para salvar um arquivo específico."""
-        folder = self._get_path(is_figure=is_figure)
+    def get_file_path(self, filename: str, is_figure: bool = False,
+                      subdir: Optional[str] = None) -> Path:
+        """Caminho completo para um arquivo.
+
+        subdir separa os artefatos por tipo dentro da pasta do experimento:
+        "runs" (um JSON enxuto por execução), "arrays" (históricos pesados em
+        .npz) e "figures" (via is_figure). O summary.csv e o banco de instâncias
+        ficam na raiz, compartilhados por todas as execuções da varredura.
+        """
+        folder = self._get_path(is_figure=is_figure, subdir=subdir)
         return folder / filename
 
 
