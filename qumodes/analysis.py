@@ -221,7 +221,7 @@ def state_metrics(ket: np.ndarray, inst: "H.VRPInstance", params: "H.Hamiltonian
     norm = float(np.sum(np.abs(ket) ** 2))
     ev = H._get_evaluator(inst, cutoff, G, None)
     P = ev.distribution(ket)
-    energy = ev.energy(P, params)
+    energy = ev.energy(P, params, ket=ket)
     probs = np.clip(ev.slot_distribution(P).reshape(-1), 0, None)
     probs = probs / probs.sum()
 

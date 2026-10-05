@@ -161,3 +161,56 @@ A expansão algébrica de $H_{\text{capacity}}$ gera termos em potências dos op
 
 * **$H_{\text{gap}}$:** Assegura o empacotamento contínuo das rotas (*left-packing*), garantindo que um veículo só ocupe a posição $r$ se a posição $r-1$ estiver preenchida.
 
+---
+
+Vou ser direto sobre a pergunta 1 antes de responder as outras: a proposta não veio de um artigo que eu estava citando. Ela veio da estrutura do seu Hamiltoniano — o fato de todos os termos serem funções de $\theta$ e $\phi$ apenas. Deixe-me procurar o que existe de fato na literatura, para você não citar nada de segunda mão.Encontrei o ancoradouro, e ele é mais direto do que eu esperava. Deixe-me medir uma última coisa antes de responder a (3).O cálculo está errado — o melhor gaussiano também corre para $\langle n\rangle$ enorme, então a diferença saiu degenerada. A comparação certa é minimizar $h_{disc} + \lambda_{exc}\langle n\rangle$ em cada classe.Encontrei o ancoradouro, e ele é mais forte do que eu esperava.
+
+## 1. Referências
+
+Sendo direto: a proposta não saiu de um artigo que eu estivesse citando. Ela saiu da estrutura do seu Hamiltoniano. Mas ao procurar, o que achei é que **o problema e a correção são padrão na literatura de GKP**, e seu termo $\lambda_{disc}$ é literalmente o objeto central dela.
+
+O termo estabilizador de GKP tem exatamente a forma do seu: o Hamiltoniano GKP de energia infinita para uma rede retangular de modo único se escreve como $-E_p\cos(\cdot\hat p) - E_q\cos(\cdot\hat q)$. Seu $2 - \cos(R\theta) - \cos(M\phi)$ é esse objeto com $R$ e $M$ no lugar da dimensão do código.
+
+E o problema que identifiquei é conhecido: os estados fundamentais exatos de Hamiltonianos de código GKP multimodo não são normalizáveis.
+
+A correção padrão é precisamente o que propus: um espectro com gap pode ser obtido incluindo um potencial de confinamento fraco, dando o Hamiltoniano GKP de energia finita $H_{\text{GKP},\Delta} = \frac{\omega_0}{2}(\hat p^2 + \hat q^2) - E_p\cos(\cdot) - E_q\cos(\cdot)$.
+
+Referências verificáveis para a tese:
+
+- **Gottesman, Kitaev, Preskill**, *Encoding a qubit in an oscillator*, arXiv:quant-ph/0008040, Phys. Rev. A 64, 012310 (2001). A fonte do código e da estrutura de rede no espaço de fases.
+- *Advances in Bosonic Quantum Error Correction with GKP Codes*, arXiv:2308.02913. Revisão; traz $H_{\text{GKP}}$ e $H_{\text{GKP},\Delta}$ lado a lado, com a interpretação de partícula num toro sob dois potenciais cosseno — exatamente a sua geometria.
+- *Topological stabilizer models on continuous variables*, arXiv:2411.04993. Afirma a não-normalizabilidade dos fundamentais.
+- *The fabulous world of GKP codes*, arXiv:2412.02442. Hamiltoniano estabilizador multimodo e tratamento perturbativo em torno dos mínimos do cosseno.
+- *Stabilization of Finite-Energy GKP States*, arXiv:2009.07941, e *Two-qubit operations for finite-energy GKP encodings*, arXiv:2305.05262. O operador envelope $\hat E_\Delta = e^{-\Delta^2\hat n}$, que é a versão "preparação de estado" do mesmo confinamento.
+
+O enquadramento da tese fica forte: você não está inventando um regularizador, está aplicando à sua formulação a passagem **energia infinita → energia finita** que é canônica em GKP. E a ligação é natural, porque seu $\lambda_{disc}$ já é um estabilizador GKP.
+
+## 2. O termo
+
+$$\hat H = \underbrace{H_{\mathrm{dist}} + \lambda_{\mathrm{col}}(\cdots) + \lambda_{\mathrm{gap}}(\cdots) + \lambda_{\mathrm{veh}}(\cdots) + \lambda_{\mathrm{cap}}(\cdots) + \lambda_{\mathrm{disc}}\sum_i\left[2 - \cos(R\hat\theta_i) - \cos(M\hat\phi_i)\right]}_{\hat H_{\mathrm{enc}}} \;+\; \lambda_{\mathrm{exc}}\sum_i \hat n_i$$
+
+com $\hat n_i = \frac{1}{2\hbar}(\hat x_i^2 + \hat p_i^2) - \tfrac12$. Pode-se escrever equivalentemente como $\frac{\lambda_{exc}}{2\hbar}\sum_i(\hat x_i^2 + \hat p_i^2)$, que é a forma de confinamento da literatura e deixa explícito que é o único termo **não-modular** — o único que enxerga $\hat x$ e $\hat p$, e não $\hat x \bmod a$ e $\hat p \bmod b$.
+
+Sobre a verificação: $\hat n$ não tem contrapartida na grade de nós, que parametriza só $(\theta,\phi)$. O confinamento age sobre o envelope, grau de liberdade que a grade não enxerga. Logo **T1–T5 continuam testando exatamente $\hat H_{enc}$**, e nada no `verify_encoding` muda.
+
+## 3. Sim, e de um modo que não é o esperado
+
+Calculei o mínimo de $h_{disc} + \lambda_{exc}\langle n\rangle$ para gaussianos e GKP:
+
+| caso | $R$ | $M$ | GKP ($\lambda_{exc}{=}0{,}01$) | gaussiano | GKP vence? |
+|---|---|---|---|---|---|
+| TSP $C{=}3$ | 3 | 1 | 0,477 | 1,118 | sim |
+| TSP $C{=}4$ | 4 | 1 | 0,587 | 1,118 | sim |
+| TSP $C{=}5$ | 5 | 1 | 0,697 | 1,118 | sim (perde em 0,05) |
+| VRP $C{=}4,V{=}2$ | 2 | 2 | **0,470** | 1,226 | sim |
+| VRP $C{=}6,V{=}2$ | 3 | 2 | 0,585 | 1,225 | sim |
+
+Três consequências.
+
+**O piso gaussiano sobe no VRP** (1,226 contra 1,118), porque com $M>1$ a direção $\phi$ também precisa de resolução. Isso é a mesma assinatura do que já havíamos medido: o $\lambda_{disc}$ mínimo é 0 no TSP e $\ge 5$ no VRP.
+
+**Mas o VRP não é uniformemente mais difícil.** $C{=}4$ com dois veículos ($R{=}2$, $M{=}2$) é **mais fácil** que $C{=}4$ com um ($R{=}4$, $M{=}1$): 0,470 contra 0,587. Distribuir as cidades entre veículos reduz $R$, e a exigência sobre a resolução em $\theta$ cai mais do que sobe a exigência em $\phi$. Isso é um resultado que eu não anteciparia e que vale testar diretamente — se confirmado no VQE, é um achado de tese: **o VRP pode ser mais favorável à codificação modular que o TSP de mesmo tamanho.**
+
+**O teto de $\lambda_{exc}$ depende do caso**, e o limitante é o TSP com $R$ grande, não o VRP. Em $\lambda_{exc}=0{,}05$ o TSP $C{=}5$ já perde a vantagem não-gaussiana; o VRP $C{=}6,V{=}2$ ainda a mantém. A faixa segura para ambos é $\lambda_{exc} \in [0{,}001,\ 0{,}01]$.
+
+Na prática isso significa um eixo a mais no `lambda_grids.py`, com listas distintas — `LAMBDA_EXC_TSP` mais conservadora que `LAMBDA_EXC_VRP` — e indexada por $R$, não por $C$. Posso implementar o termo em `evaluate_sf_state` com `lambda_exc` em `HamiltonianParams`, registrando `energy_encoding` e `energy_total` separadamente para que as baselines de vácuo e uniforme continuem comparáveis.

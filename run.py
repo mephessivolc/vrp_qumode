@@ -446,8 +446,17 @@ def run_experiment(
         "best_evaluated_any": float(np.min(metrics.cost_history)) if metrics.cost_history else None,
         "optimum_c_star": c_star,
         "energy_gap_percent": _pct(e_final, c_star),
-        "vacuum": baselines["vacuum"]["energy_components"]["total"],
-        "uniform": baselines["uniform"]["energy_components"]["total"],
+        # Comparações sempre sobre Ĥ_enc ("encoding"): vácuo e uniforme não têm
+        # termo de confinamento (⟨n̂⟩ = 0 no vácuo, e o uniforme é amostrado só
+        # em ângulos), então comparar "total" com λ_exc > 0 seria desonesto.
+        "encoding_final": final_m["energy_components"].get("encoding"),
+        "exc_final": final_m["energy_components"].get("exc"),
+        "mean_photons_total": final_m["energy_components"].get("mean_photons"),
+        "lambda_exc": h_params.lambda_exc,
+        "vacuum": baselines["vacuum"]["energy_components"].get(
+            "encoding", baselines["vacuum"]["energy_components"]["total"]),
+        "uniform": baselines["uniform"]["energy_components"].get(
+            "encoding", baselines["uniform"]["energy_components"]["total"]),
         "cutoff_floor": floor_value,
         "floor_gap_percent": _pct(floor_value, c_star),
         "gap_to_floor": None if floor_value is None else e_final - floor_value,
@@ -605,6 +614,10 @@ def run_experiment(
             "expected_cost_given_feasible": final_m.get("expected_cost_given_feasible"),
             "energy_normalized_final": ((e_final - c_star) / (energy_block["uniform"] - c_star)
                                         if energy_block["uniform"] != c_star else None),
+            "lambda_exc": h_params.lambda_exc,
+            "energy_encoding_final": final_m["energy_components"].get("encoding"),
+            "energy_exc_final": final_m["energy_components"].get("exc"),
+            "mean_photons_total": final_m["energy_components"].get("mean_photons"),
             "h_disc_per_mode": (metrics.energy_components.get("disc", 0.0)
                                 / h_params.lambda_disc / C
                                 if h_params.lambda_disc else None),

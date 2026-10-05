@@ -84,10 +84,39 @@ class HamiltonianParams:
     lambda_dist: float = 1.0
     lambda_vehicle: float = 0.0   # > 0: todos os M veículos são obrigatórios (como no BruteForce)
     lambda_disc: float = 5.0      # evita mínimos fracionários; confira com check_penalties
+    lambda_exc: float = 0.0       # confinamento: λ_exc Σ_i ⟨n̂_i⟩ (ver nota abaixo)
+
+    # ------------------------------------------------------------------
+    # Sobre λ_exc (termo de confinamento)
+    # ------------------------------------------------------------------
+    # Todos os demais termos são funções apenas das variáveis MODULARES
+    # θ = 2πx/a mod 2π e φ = 2πp/b mod 2π: o Hamiltoniano vive no toro e é
+    # invariante sob x -> x + a, p -> p + b. Ele é portanto CEGO ao envelope,
+    # e nada cobra pela excitação do modo.
+    #
+    # A consequência é que ⟨Ĥ_enc⟩ não tem minimizador sobre os estados
+    # físicos: o termo λ_disc decresce monotonamente rumo a 1 por modo ao
+    # longo do squeezing, com ⟨n⟩ -> ∞, e só o corte de Fock limita essa
+    # direção — limitando-a por destruir a norma do estado.
+    #
+    # É o mesmo fenômeno dos códigos GKP, cujo Hamiltoniano estabilizador
+    # -E_q cos(·x̂) - E_p cos(·p̂) tem fundamentais não normalizáveis. A
+    # correção padrão na literatura é somar um potencial de confinamento
+    # fraco (ω0/2)(x̂² + p̂²) = ħω0(n̂ + ½), obtendo o Hamiltoniano GKP de
+    # energia finita. Ver Gottesman, Kitaev & Preskill, Phys. Rev. A 64,
+    # 012310 (2001), arXiv:quant-ph/0008040; arXiv:2308.02913 (revisão, com
+    # H_GKP e H_GKP,Δ); arXiv:2411.04993 (não normalizabilidade);
+    # arXiv:2009.07941 e arXiv:2305.05262 (operador envelope e^{-Δ²n̂}).
+    #
+    # λ_exc = 0 (padrão) reproduz exatamente o comportamento anterior.
+    # Faixa útil medida: 0.001 a 0.01. Acima de ~0.05 o custo em fótons
+    # anula a vantagem de estados tipo GKP sobre gaussianos. Use
+    # `suggest_lambda_exc` para o teto imposto pelo espaçamento de custos.
 
     def weights(self) -> Tuple[float, ...]:
         return (self.lambda_dist, self.lambda_col, self.lambda_gap,
-                self.lambda_vehicle, self.lambda_cap, self.lambda_disc)
+                self.lambda_vehicle, self.lambda_cap, self.lambda_disc,
+                self.lambda_exc)
 
 
 @dataclass
@@ -241,6 +270,13 @@ def hamiltonian_energy(
     """Energia total e componentes (já ponderadas) em pontos (θ, φ).
 
     theta, phi: arrays (..., N). Aceita lotes (ex.: amostras ou grade).
+
+    Esta é a função CLÁSSICA no toro: avalia Ĥ_enc, a parte modular. O termo de
+    confinamento λ_exc Σ⟨n̂⟩ não tem contrapartida aqui, porque (θ, φ) não
+    parametriza o envelope; a chave "exc" vem zerada e "encoding" == "total".
+    É por isso que `check_penalties`, `brute_force_grid`, `continuous_minimum` e
+    a verificação da codificação continuam testando exatamente o mesmo objeto,
+    com ou sem λ_exc.
     """
     params = params or HamiltonianParams()
     theta = np.asarray(theta, dtype=np.float64)
@@ -268,7 +304,10 @@ def hamiltonian_energy(
         "capacity": params.lambda_cap * h_cap,
         "disc": params.lambda_disc * h_disc,
     }
-    out["total"] = sum(out.values())
+    encoding = sum(out.values())
+    out["encoding"] = encoding
+    out["exc"] = np.zeros_like(np.asarray(encoding, dtype=np.float64))
+    out["total"] = encoding
     return out
 
 
@@ -321,6 +360,37 @@ def suggest_penalties(
         lambda_cap=lam_cap,
         lambda_disc=lambda_disc,
     )
+
+
+def suggest_lambda_exc(inst: VRPInstance, params: Optional[HamiltonianParams] = None,
+                       photon_budget: float = 10.0,
+                       max_grid: int = 2_000_000) -> Dict[str, float]:
+    """Teto para λ_exc imposto pelo espaçamento entre níveis de custo.
+
+    O confinamento não pode tornar lucrativo trocar qualidade de rota por
+    fótons: se δ é a distância entre o custo ótimo e o próximo nível viável, e
+    Δ⟨n⟩ é a diferença de excitação entre o estado que resolve a codificação e
+    um estado mais barato, é preciso λ_exc · Δ⟨n⟩ < δ.
+
+    Devolve o teto, um valor recomendado (um décimo dele, dentro da faixa
+    medida 0.001–0.01) e os números que o produziram. `photon_budget` é o
+    Δ⟨n⟩ assumido; 10 é a ordem necessária para um estado tipo GKP resolver
+    R ~ 4 nós de posição.
+    """
+    params = params or HamiltonianParams()
+    size = (inst.M * inst.R) ** inst.N
+    if size > max_grid:
+        raise MemoryError(f"(M·R)^N = {size:,} configurações; reduza a instância.")
+    th, ph = _grid_angles(inst)
+    E = hamiltonian_energy(th, ph, inst, params)["encoding"]
+    levels = np.unique(np.round(np.asarray(E, dtype=np.float64), 9))
+    gap = float(levels[1] - levels[0]) if levels.size > 1 else float("inf")
+    budget = max(float(photon_budget), 1e-9)
+    ceiling = gap / budget
+    return {"cost_gap": gap, "photon_budget": budget,
+            "lambda_exc_max": ceiling,
+            "lambda_exc_suggested": float(min(0.01, max(0.001, 0.1 * ceiling))),
+            "num_energy_levels": int(levels.size)}
 
 
 # ---------------------------------------------------------------------------
@@ -693,7 +763,42 @@ class ZakEvaluator:
         P = np.abs(np.fft.fftn(psi, axes=tuple(range(0, 2 * self.inst.N, 2)))) ** 2
         return P / P.sum()
 
-    def energy(self, P: np.ndarray, params: HamiltonianParams) -> Dict[str, float]:
+    def mean_photons_per_mode(self, ket: np.ndarray) -> List[float]:
+        """⟨n̂_i⟩ de cada modo, a partir do ket.
+
+        Precisa do ket e não da distribuição de Zak: P é função só de
+        (x mod a, p mod b) e perde justamente o envelope que n̂ mede.
+        Normaliza pela norma do ket, de modo que o valor continue significando
+        o número médio de fótons do estado representável mesmo quando o corte
+        de Fock já descartou parte da amplitude.
+        """
+        ket = np.asarray(ket)
+        norm = float(np.sum(np.abs(ket) ** 2))
+        if norm <= 0.0:
+            return [0.0] * self.inst.N
+        levels = np.arange(ket.shape[0], dtype=np.float64)
+        out = []
+        for mode in range(ket.ndim):
+            marg = np.sum(np.abs(np.moveaxis(ket, mode, 0)) ** 2,
+                          axis=tuple(range(1, ket.ndim)))
+            out.append(float(np.dot(levels, marg) / norm))
+        return out
+
+    def energy(self, P: np.ndarray, params: HamiltonianParams,
+               ket: Optional[np.ndarray] = None) -> Dict[str, float]:
+        """Componentes ponderadas, com o confinamento quando ket é fornecido.
+
+        Chaves devolvidas:
+          dist, col, gap, vehicle, capacity, disc  componentes modulares
+          encoding   soma das acima — é Ĥ_enc, comparável com as linhas de
+                     base de vácuo e uniforme e com o ótimo clássico C*
+          exc        λ_exc Σ_i ⟨n̂_i⟩ (0 se λ_exc = 0 ou ket ausente)
+          mean_photons  Σ_i ⟨n̂_i⟩ sem peso, para diagnóstico
+          total      encoding + exc — é o que o VQE minimiza
+
+        Com λ_exc = 0, total == encoding e o comportamento é idêntico ao
+        anterior.
+        """
         unit = self._unit_components()
         w = {"dist": params.lambda_dist, "col": params.lambda_col, "gap": params.lambda_gap,
              "vehicle": params.lambda_vehicle, "capacity": params.lambda_cap, "disc": params.lambda_disc}
@@ -701,7 +806,15 @@ class ZakEvaluator:
             raise ValueError("λ_cap > 0 exige demands e Q.")
         Pf = P.reshape(-1)
         out = {c: float(w[c] * np.dot(Pf, unit[c].astype(np.float64, copy=False))) if w[c] != 0 else 0.0 for c in self.COMPONENTS}
-        out["total"] = float(sum(out.values()))
+        encoding = float(sum(out.values()))
+
+        photons = 0.0
+        if ket is not None:
+            photons = float(sum(self.mean_photons_per_mode(ket)))
+        out["encoding"] = encoding
+        out["mean_photons"] = photons
+        out["exc"] = float(params.lambda_exc) * photons
+        out["total"] = encoding + out["exc"]
         return out
 
     # --- agregação por slot (v, r) e amostragem ------------------------
@@ -794,7 +907,11 @@ def evaluate_sf_state(
     Assinatura compatível com solver.py:
         evaluate_sf_state(state=..., M=V, N=C, D=D, demands=..., Q=..., cutoff=..., params=...)
 
-    Retorna {"total", "dist", "col", "gap", "capacity", "vehicle", "disc"}.
+    Retorna {"total", "encoding", "exc", "mean_photons", "dist", "col", "gap",
+    "capacity", "vehicle", "disc"}. "encoding" é a parte modular Ĥ_enc, que é a
+    grandeza comparável com C* e com as linhas de base; "total" acrescenta o
+    confinamento λ_exc Σ⟨n̂⟩ e é o que o VQE minimiza. Com λ_exc = 0 os dois
+    coincidem.
     Como P >= 0 e soma 1, o valor retornado nunca fica abaixo do menor valor
     de F nos pontos da grade de Zak. Se `check_penalties(..., cutoff=cutoff)`
     retornar ok=True, esse limite é o custo ótimo (GAP >= 0 no run.py).
@@ -803,7 +920,7 @@ def evaluate_sf_state(
     instance = _resolve_instance(N, M, D, demands, Q, inst, positions, requires_all_vehicles(params))
     ket = _ket_of(state)
     ev = _get_evaluator(instance, ket.shape[0], G, n_cells)
-    return ev.energy(ev.distribution(ket), params)
+    return ev.energy(ev.distribution(ket), params, ket=ket)
 
 
 def extract_routes(
@@ -900,6 +1017,11 @@ def check_penalties(
     Com continuous_starts > 0 também procura mínimos fracionários no toro.
     Com cutoff informado, confere o menor valor de F na grade de Zak usada por
     evaluate_sf_state: é o limite inferior exato da energia reportada ao VQE.
+
+    Valida Ĥ_enc, não Ĥ_enc + λ_exc Σ⟨n̂⟩: o confinamento age sobre o envelope,
+    que a grade (θ, φ) não parametriza. Logo este teste — e a verificação da
+    codificação — independem de λ_exc, como deve ser. O limite inferior
+    reportado continua valendo para a chave "encoding" de evaluate_sf_state.
     """
     params = params or HamiltonianParams()
     require_all_vehicles = requires_all_vehicles(params, require_all_vehicles)
@@ -921,6 +1043,8 @@ def check_penalties(
     out = {"positions": instance.R, "require_all_vehicles": require_all_vehicles,
            "grid_min_energy": float(E.min()),
            "best_feasible_cost": best_feasible,
+           "lambda_exc": float(params.lambda_exc),
+           "validates": "H_enc",   # o confinamento não é testado aqui: ver nota
            "ok": bool(np.isclose(E.min(), best_feasible))}
     if continuous_starts > 0:
         cm = continuous_minimum(instance, params, n_starts=continuous_starts)
