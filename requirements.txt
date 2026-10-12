@@ -2,8 +2,9 @@ pandas
 scipy<1.14.0
 networkx
 matplotlib
-strawberryfields
-numpy
+strawberryfields==0.23.0
+numpy>=1.26,<2.0
 seaborn
 torch
 torchvision
+

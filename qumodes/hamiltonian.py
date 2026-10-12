@@ -1,64 +1,160 @@
 """
-hamiltonian.py — Hamiltoniano modular (Zak/Fejér) para o VRP/CVRP em qumodes.
+hamiltonian.py — Hamiltoniano modular do TSP/VRP em qumodes, formulação de
+OPERADORES na base de Fock truncada.
 
-Codificação
------------
-Um qumode por cidade i. Posição na rota em x̂_i, veículo em p̂_i, via as
-quadraturas modulares
+Mudança em relação à versão anterior
+------------------------------------
+A versão anterior avaliava H como uma FUNÇÃO CLÁSSICA no toro, sobre a
+distribuição de Zak: <H> = sum_(theta,phi) P(theta,phi) F(theta,phi). Isso
+trata todos os observáveis como comutantes e escolhe implicitamente o
+ordenamento diagonal — incorreto nos termos com produtos de operadores no
+MESMO modo (gap, vehicle), onde a^2 como número não é <A^2> como operador.
 
-    θ_i = 2π x̂_i / a  (mod 2π),     φ_i = 2π p̂_i / b  (mod 2π),     a·b = 2πħ.
+Aqui H é um operador hermitiano no espaço de Fock truncado, e <psi|H|psi> é
+uma expectativa quântica de verdade. Só assim "o mínimo do Hamiltoniano é a
+solução do VRP" é uma afirmação sobre autovalores.
 
-Com a·b = 2πħ, as funções periódicas de x̂_i e p̂_i comutam (representação de
-Zak), de modo que o Hamiltoniano é uma função F(θ, φ) de operadores que
-comutam e inf spec(Ĥ) = min F.
+Operadores de deslocamento exatos
+---------------------------------
+U = exp(i (2pi/a) x) e V = exp(i (2pi/b) p) são operadores de DESLOCAMENTO:
+U = D(i k /sqrt(2 hbar) ... ) — ver `displacement_operator`. Pela relação de
+Weyl, D(al)D(be) = exp(i Im(al be*)) D(al+be), e com a*b = 2 pi hbar o fator
+de fase vale exp(-i pi) nos dois ordenamentos, logo [U, V] = 0 EXATAMENTE.
 
-Nós da grade:  θ_r = 2π(r-1)/R  (r = 1..R),   φ_v = 2π(v-1)/M  (v = 1..M).
+NÃO use matrix_exp da quadratura truncada: exp de uma matriz já cortada não é
+o corte de exp(i k x). Medido (hbar=1, M=R=2): ||UV-VU||_2 fica em ~2.0 em
+qualquer cutoff com matrix_exp, contra ~0.99 no espaço todo e 1.5e-15 no
+quarto inferior do espectro com D(alpha) exato em cutoff 50. A violação vive
+nos níveis altos de Fock; o encoding é fiel num subespaço de baixa energia
+cujo tamanho cresce com o cutoff.
 
-Atribuição (núcleo de Fejér):  a_{i,v,r} = F_R(θ_i - θ_r) · F_M(φ_i - φ_v),
-exata nos nós (delta de Kronecker), com derivada nula nos nós e soma 1.
+Ordenamentos
+------------
+Critério adotado, uniforme em todo o arquivo:
+  PENALIDADES usam sanduíche   B n B      (hermitiano E positivo semidefinido)
+  CUSTOS      usam anticomutador {A,B}/2  (hermitiano; não precisa ser PSD)
 
-Termos
-------
-    H = λ_dist·H_dist + λ_col·H_col + λ_gap·H_gap + λ_vehicle·H_vehicle
-        + λ_cap·H_cap + λ_disc·H_disc
+Para o termo de lacuna, a alternativa (1/2){n, B^2} tem autovalor mínimo
+medido -1.22e-2: existiria estado em que ABRIR uma lacuna reduz a energia.
 
-Convenção de ħ: a mesma do Strawberry Fields (x̂ = sqrt(ħ/2)(â + â†)), ħ = 2
-por padrão.
+Precisão
+--------
+A construção dos operadores é feita UMA vez em numpy float64 e congelada. Em
+TensorFlow ela entra como constante: o gradiente flui só pelo estado, nunca
+através de eigh. Medido no backend tf do Strawberry Fields (complex64), com
+circuito de 44 parâmetros: ||ket_fock - ket_tf||_inf = 2.1e-7, suficiente
+para energias ~1e2 com descidas ~1e-2 por iteração.
 
-Integração: `evaluate_sf_state` e `extract_routes` mantêm a assinatura usada
-por solver.py (N=C, M=V, D, demands, Q, cutoff, params) e o formato de rotas
-esperado por run.py.
-
-Índices internos são 0-based: cidade i = 0..N-1 corresponde ao nó i+1 da
-matriz de distâncias; veículo v = 0..M-1; posição r = 0..R-1.
+Verificação exata (sem VQE)
+---------------------------
+  node_energy_table    <H> em estados-produto centrados em cada configuração
+                       de nós — análogo direto do antigo brute_force_grid
+  dense_hamiltonian    matriz densa para diagonalização exata; o fundamental
+                       deve decodificar para a rota ótima clássica
+Ambas em numpy float64. Não use TF aqui: verificação é padrão-ouro.
 """
 from __future__ import annotations
 
 import itertools
 import math
-import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 __all__ = [
-    # integração com solver.py / run.py
-    "HamiltonianParams", "evaluate_sf_state", "extract_routes", "check_penalties",
-    "instance_from_legacy", "auto_positions", "requires_all_vehicles", "vehicle_penalty_bound",
-    "clear_cache", "ZakEvaluator", "zak_grid_points", "get_max_grid_points", "set_max_grid_points",
-    # núcleo do modelo
-    "VRPInstance", "fejer", "quadratures_to_angles", "assignments", "hamiltonian_energy",
-    "suggest_penalties", "decode", "routes_cost", "is_feasible",
-    "brute_force_grid", "continuous_minimum", "ideal_energy_table",
-    "estimate_from_samples", "hermite_functions", "zak_distribution_from_ket",
-    "expectation_from_distribution", "sample_from_distribution",
+    "VRPInstance", "HamiltonianParams", "ModularOperators",
+    "auto_positions", "requires_all_vehicles", "instance_from_legacy",
+    "decode", "routes_cost", "is_feasible",
+    "suggest_penalties", "vehicle_penalty_bound", "suggest_lambda_exc",
+    "displacement_operator", "fejer_operator", "build_modular_operators",
+    "energy_components", "assignment_distribution",
+    "node_energy_table", "dense_hamiltonian", "ground_state",
 ]
 
 
 # ---------------------------------------------------------------------------
-# Parâmetros e instância
+# 1. Definição do problema
 # ---------------------------------------------------------------------------
+@dataclass
+class VRPInstance:
+    """Instância do VRP.
+
+    D        : matriz (N+1)x(N+1); o nó 0 é o depósito.
+    M        : número de veículos.
+    R        : posições por veículo (padrão N). Se a capacidade é em número de
+               cidades (demandas unitárias), use R = Q e dispense λ_cap.
+    demands  : demandas das N cidades (necessário se λ_cap > 0).
+    Q        : capacidade (escalar, igual para todos) ou vetor com M capacidades.
+    hbar     : convenção de ħ (Strawberry Fields usa 2).
+    """
+    D: np.ndarray
+    M: int
+    R: Optional[int] = None
+    demands: Optional[np.ndarray] = None
+    Q: Optional[object] = None
+    hbar: float = 2.0
+
+    def __post_init__(self) -> None:
+        self.D = np.asarray(self.D, dtype=np.float64)
+        if self.D.ndim != 2 or self.D.shape[0] != self.D.shape[1] or self.D.shape[0] < 2:
+            raise ValueError("D deve ser quadrada (N+1)x(N+1), com o depósito no índice 0.")
+        if self.R is None:
+            self.R = self.N
+        if self.M < 1 or self.R < 1:
+            raise ValueError("M e R devem ser >= 1.")
+        if self.M * self.R < self.N:
+            raise ValueError(f"M·R = {self.M * self.R} < N = {self.N}: não há slots suficientes.")
+        if self.demands is not None:
+            self.demands = np.asarray(self.demands, dtype=np.float64).reshape(-1)
+            if self.demands.shape == (self.N + 1,):       # vetor com o depósito
+                self.demands = self.demands[1:]
+            if self.demands.shape != (self.N,):
+                raise ValueError("demands deve ter comprimento N (ou N+1 incluindo o depósito).")
+        if self.Q is not None:
+            q = np.asarray(self.Q, dtype=np.float64).reshape(-1)
+            if q.size == 1:
+                q = np.full(self.M, q[0])
+            if q.size != self.M:
+                raise ValueError("Q deve ser escalar ou ter comprimento M.")
+            self.Q = q
+
+    # --- tamanhos -------------------------------------------------------
+    @property
+    def N(self) -> int:
+        return self.D.shape[0] - 1
+
+    @property
+    def d0(self) -> np.ndarray:           # depósito -> cidade
+        return self.D[0, 1:]
+
+    @property
+    def dback(self) -> np.ndarray:        # cidade -> depósito
+        return self.D[1:, 0]
+
+    @property
+    def Dcc(self) -> np.ndarray:          # cidade -> cidade, diagonal zerada
+        Dc = self.D[1:, 1:].copy()
+        np.fill_diagonal(Dc, 0.0)
+        return Dc
+
+    # --- rede modular ---------------------------------------------------
+    @property
+    def a(self) -> float:
+        return math.sqrt(2.0 * math.pi * self.hbar)
+
+    @property
+    def b(self) -> float:
+        return 2.0 * math.pi * self.hbar / self.a   # garante a·b = 2πħ
+
+    @property
+    def theta_nodes(self) -> np.ndarray:
+        return 2.0 * np.pi * np.arange(self.R) / self.R
+
+    @property
+    def phi_nodes(self) -> np.ndarray:
+        return 2.0 * np.pi * np.arange(self.M) / self.M
+
 @dataclass
 class HamiltonianParams:
     """Pesos do Hamiltoniano.
@@ -202,117 +298,107 @@ class VRPInstance:
 # ---------------------------------------------------------------------------
 # Codificação
 # ---------------------------------------------------------------------------
-def fejer(t: np.ndarray, K: int) -> np.ndarray:
-    """Núcleo de Fejér F_K(t) = |Σ_{k<K} e^{ikt}|²/K² (série de Fourier finita)."""
-    t = np.asarray(t, dtype=np.float64)
-    out = np.full(t.shape, 1.0 / K)
-    for m in range(1, K):
-        out += 2.0 * (K - m) / K**2 * np.cos(m * t)
-    return out
 
 
-def quadratures_to_angles(x: np.ndarray, p: np.ndarray, inst: VRPInstance) -> Tuple[np.ndarray, np.ndarray]:
-    """Converte quadraturas (x, p) em ângulos modulares (θ, φ) ∈ [0, 2π)."""
-    theta = np.mod(2.0 * np.pi * np.asarray(x, dtype=np.float64) / inst.a, 2.0 * np.pi)
-    phi = np.mod(2.0 * np.pi * np.asarray(p, dtype=np.float64) / inst.b, 2.0 * np.pi)
-    return theta, phi
+def auto_positions(N: int, M: int, demands: Optional[np.ndarray], Q: Optional[object],
+                   require_all_vehicles: bool = False) -> int:
+    """Posições por veículo (limites que valem para QUALQUER solução viável).
 
-
-def assignments(theta: np.ndarray, phi: np.ndarray, inst: VRPInstance) -> np.ndarray:
-    """a[..., i, v, r] = F_R(θ_i - θ_r) F_M(φ_i - φ_v).  theta, phi: (..., N)."""
-    theta = np.asarray(theta, dtype=np.float64)
-    phi = np.asarray(phi, dtype=np.float64)
-    fr = fejer(theta[..., :, None] - inst.theta_nodes, inst.R)   # (..., N, R)
-    fv = fejer(phi[..., :, None] - inst.phi_nodes, inst.M)       # (..., N, M)
-    return fv[..., :, :, None] * fr[..., :, None, :]             # (..., N, M, R)
-
-
-# ---------------------------------------------------------------------------
-# Energia (símbolo clássico F(θ, φ); exato como operador por comutarem)
-# ---------------------------------------------------------------------------
-def _terms(a: np.ndarray, inst: VRPInstance) -> Dict[str, np.ndarray]:
-    n = a.sum(axis=-3)                                            # (..., M, R)
-
-    # distância
-    h_start = np.einsum("...iv,i->...", a[..., 0], inst.d0)
-    h_last = np.einsum("...iv,i->...", a[..., -1], inst.dback)
-    if inst.R > 1:
-        h_internal = np.einsum("...ivr,ij,...jvr->...", a[..., :-1], inst.Dcc, a[..., 1:])
-        h_ret = np.einsum("...ivr,i,...vr->...", a[..., :-1], inst.dback, 1.0 - n[..., 1:])
-    else:
-        h_internal = np.zeros(a.shape[:-3])
-        h_ret = np.zeros(a.shape[:-3])
-    h_dist = h_start + h_internal + h_ret + h_last
-
-    # colisão: Σ_{v,r} Σ_{i<j} a_i a_j = ½ Σ (n² − Σ_i a²)
-    h_col = 0.5 * np.sum(n**2 - np.sum(a**2, axis=-3), axis=(-2, -1))
-
-    # lacunas: Σ_v Σ_{r≥2} n_{v,r} [(r−1) − Σ_{q<r} n_{v,q}]²
-    if inst.R > 1:
-        prefix = np.cumsum(n, axis=-1)[..., :-1]                  # Σ_{q<r} n, r = 2..R
-        target = np.arange(1, inst.R, dtype=np.float64)
-        h_gap = np.sum(n[..., 1:] * (target - prefix) ** 2, axis=(-2, -1))
-    else:
-        h_gap = np.zeros(a.shape[:-3])
-
-    # uso de veículos
-    h_vehicle = np.sum((n[..., 0] - 1.0) ** 2, axis=-1)
-
-    return {"dist": h_dist, "col": h_col, "gap": h_gap, "vehicle": h_vehicle, "n": n}
-
-
-def hamiltonian_energy(
-    theta: np.ndarray,
-    phi: np.ndarray,
-    inst: VRPInstance,
-    params: Optional[HamiltonianParams] = None,
-) -> Dict[str, np.ndarray]:
-    """Energia total e componentes (já ponderadas) em pontos (θ, φ).
-
-    theta, phi: arrays (..., N). Aceita lotes (ex.: amostras ou grade).
-
-    Esta é a função CLÁSSICA no toro: avalia Ĥ_enc, a parte modular. O termo de
-    confinamento λ_exc Σ⟨n̂⟩ não tem contrapartida aqui, porque (θ, φ) não
-    parametriza o envelope; a chave "exc" vem zerada e "encoding" == "total".
-    É por isso que `check_penalties`, `brute_force_grid`, `continuous_minimum` e
-    a verificação da codificação continuam testando exatamente o mesmo objeto,
-    com ou sem λ_exc.
+    - capacidade: nenhum veículo leva mais que floor(max Q / menor demanda) cidades;
+    - todos os veículos obrigatórios: nenhum leva mais que N − M + 1 cidades.
+    Menos posições significam slots mais espaçados em x (melhor resolução por cutoff).
     """
-    params = params or HamiltonianParams()
-    theta = np.asarray(theta, dtype=np.float64)
-    phi = np.asarray(phi, dtype=np.float64)
-    a = assignments(theta, phi, inst)
-    t = _terms(a, inst)
+    R = N
+    if demands is not None and Q is not None:
+        d = np.asarray(demands, dtype=np.float64).reshape(-1)
+        if d.size == N + 1:
+            d = d[1:]
+        pos = d[d > 0]
+        if pos.size:
+            R = min(R, int(math.floor(float(np.max(Q)) / float(pos.min()) + 1e-9)))
+    if require_all_vehicles and M > 1:
+        R = min(R, N - M + 1)
+    R = max(1, R)
+    if M * R < N:           # instância inviável pela contagem; mantém N para não mascarar
+        return N
+    return R
 
-    # capacidade: Σ_v max(0, L_v − Q)², L_v = Σ_i q_i Σ_r a_{i,v,r}
-    if params.lambda_cap > 0.0:
-        if inst.demands is None or inst.Q is None:
-            raise ValueError("λ_cap > 0 exige demands e Q na instância.")
-        load = np.einsum("...iv,i->...v", a.sum(axis=-1), inst.demands)
-        h_cap = np.sum(np.maximum(0.0, load - inst.Q) ** 2, axis=-1)   # Q por veículo
-    else:
-        h_cap = np.zeros(theta.shape[:-1])
+def requires_all_vehicles(params: Optional["HamiltonianParams"],
+                          require_all_vehicles: Optional[bool] = None) -> bool:
+    """Regra única do pacote: explícito se informado; senão, lambda_vehicle > 0."""
+    if require_all_vehicles is not None:
+        return bool(require_all_vehicles)
+    return bool(params is not None and params.lambda_vehicle > 0)
 
-    # discretização (tipo estabilizador GKP)
-    h_disc = np.sum(2.0 - np.cos(inst.R * theta) - np.cos(inst.M * phi), axis=-1)
+def instance_from_legacy(N: int, M: int, D: np.ndarray, demands: Optional[np.ndarray] = None,
+                         Q: Optional[object] = None, R: Optional[object] = "auto",
+                         hbar: float = 2.0, require_all_vehicles: bool = False) -> VRPInstance:
+    """Constrói VRPInstance a partir dos argumentos usados por solver.py (N=C, M=V)."""
+    D = np.asarray(D, dtype=np.float64)
+    if D.shape != (N + 1, N + 1):
+        raise ValueError(f"D deve ser ({N + 1}x{N + 1}) com o depósito no índice 0; recebido {D.shape}.")
+    if R == "auto":
+        R = auto_positions(N, M, demands, Q, require_all_vehicles)
+    return VRPInstance(D=D, M=M, R=R, demands=demands, Q=Q, hbar=hbar)
 
-    out = {
-        "dist": params.lambda_dist * t["dist"],
-        "col": params.lambda_col * t["col"],
-        "gap": params.lambda_gap * t["gap"],
-        "vehicle": params.lambda_vehicle * t["vehicle"],
-        "capacity": params.lambda_cap * h_cap,
-        "disc": params.lambda_disc * h_disc,
-    }
-    encoding = sum(out.values())
-    out["encoding"] = encoding
-    out["exc"] = np.zeros_like(np.asarray(encoding, dtype=np.float64))
-    out["total"] = encoding
-    return out
+def _instance_key(inst: VRPInstance) -> tuple:
+    return (inst.D.tobytes(), inst.M, inst.R, inst.hbar,
+            None if inst.demands is None else inst.demands.tobytes(),
+            None if inst.Q is None else np.asarray(inst.Q).tobytes())
 
 
 # ---------------------------------------------------------------------------
-# Limiares suficientes na grade discreta
+# 2. Decodificação clássica (independente da representação)
+# ---------------------------------------------------------------------------
+def decode(theta: Sequence[float], phi: Sequence[float], inst: VRPInstance) -> Dict[str, object]:
+    """Arredonda (θ, φ) para o nó mais próximo e monta as rotas.
+
+    Retorna slots (v, r) 0-based por cidade e as rotas com nós 1..N,
+    ordenadas pela posição. Colisões são mantidas na ordem da cidade.
+    """
+    theta = np.asarray(theta, dtype=np.float64)
+    phi = np.asarray(phi, dtype=np.float64)
+    r = np.mod(np.rint(theta * inst.R / (2 * np.pi)).astype(int), inst.R)
+    v = np.mod(np.rint(phi * inst.M / (2 * np.pi)).astype(int), inst.M)
+    routes: List[List[int]] = []
+    for veh in range(inst.M):
+        cities = [i for i in range(inst.N) if v[i] == veh]
+        cities.sort(key=lambda i: (r[i], i))
+        routes.append([i + 1 for i in cities])
+    return {"position": r, "vehicle": v, "routes": routes}
+
+def routes_cost(routes: Sequence[Sequence[int]], D: np.ndarray) -> float:
+    """Custo clássico: depósito -> rota -> depósito, rotas vazias custam 0."""
+    total = 0.0
+    for route in routes:
+        if not route:
+            continue
+        nodes = [0, *route, 0]
+        total += sum(D[nodes[k], nodes[k + 1]] for k in range(len(nodes) - 1))
+    return float(total)
+
+def is_feasible(decoded: Dict[str, object], inst: VRPInstance,
+                require_all_vehicles: bool = False, use_capacity: bool = False) -> bool:
+    """Viabilidade da solução decodificada (sem colisão, sem lacuna, capacidade)."""
+    r, v = decoded["position"], decoded["vehicle"]
+    slots = list(zip(v, r))
+    if len(set(slots)) != len(slots):
+        return False
+    for veh in range(inst.M):
+        pos = sorted(int(r[i]) for i in range(inst.N) if v[i] == veh)
+        if pos != list(range(len(pos))):
+            return False
+        if require_all_vehicles and not pos:
+            return False
+        if use_capacity:
+            load = sum(inst.demands[i] for i in range(inst.N) if v[i] == veh)
+            if load > inst.Q[veh] + 1e-9:
+                return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 3. Penalidades
 # ---------------------------------------------------------------------------
 def _min_positive_excess(demands: np.ndarray, Q: float, max_sums: int = 2_000_000) -> float:
     """Menor excesso L − Q > 0 entre as cargas atingíveis (somas de subconjuntos)."""
@@ -324,6 +410,15 @@ def _min_positive_excess(demands: np.ndarray, Q: float, max_sums: int = 2_000_00
     excess = [s - Q for s in sums if s - Q > 1e-9]
     return min(excess) if excess else math.inf
 
+def vehicle_penalty_bound(D: np.ndarray) -> float:
+    """λ_vehicle suficiente para que veículos vazios nunca compensem.
+
+    Toda solução com um veículo vazio pode ganhar esse veículo destacando uma
+    cidade x de uma rota com >= 2 cidades; o custo sobe no máximo
+    d(prev, next) + d(0, x) + d(x, 0) <= max d_ij + max d_0i + max d_i0.
+    """
+    D = np.asarray(D, dtype=np.float64)
+    return float(D[1:, 1:].max() + D[0, 1:].max() + D[1:, 0].max())
 
 def suggest_penalties(
     inst: VRPInstance,
@@ -362,28 +457,21 @@ def suggest_penalties(
     )
 
 
-def suggest_lambda_exc(inst: VRPInstance, params: Optional[HamiltonianParams] = None,
-                       photon_budget: float = 10.0,
-                       max_grid: int = 2_000_000) -> Dict[str, float]:
+def suggest_lambda_exc(inst: VRPInstance, ops: "ModularOperators",
+                       params: Optional[HamiltonianParams] = None,
+                       photon_budget: float = 10.0) -> Dict[str, float]:
     """Teto para λ_exc imposto pelo espaçamento entre níveis de custo.
 
     O confinamento não pode tornar lucrativo trocar qualidade de rota por
-    fótons: se δ é a distância entre o custo ótimo e o próximo nível viável, e
-    Δ⟨n⟩ é a diferença de excitação entre o estado que resolve a codificação e
-    um estado mais barato, é preciso λ_exc · Δ⟨n⟩ < δ.
+    fótons: se δ é a distância entre o nível ótimo e o seguinte na tabela de
+    estados de nó, e Δ<n> é a diferença de excitação entre o estado que
+    resolve a codificação e um mais barato, é preciso λ_exc·Δ<n> < δ.
 
-    Devolve o teto, um valor recomendado (um décimo dele, dentro da faixa
-    medida 0.001–0.01) e os números que o produziram. `photon_budget` é o
-    Δ⟨n⟩ assumido; 10 é a ordem necessária para um estado tipo GKP resolver
-    R ~ 4 nós de posição.
+    photon_budget é o Δ<n> assumido; 10 é a ordem necessária para um estado
+    tipo GKP resolver R ~ 4 nós de posição.
     """
-    params = params or HamiltonianParams()
-    size = (inst.M * inst.R) ** inst.N
-    if size > max_grid:
-        raise MemoryError(f"(M·R)^N = {size:,} configurações; reduza a instância.")
-    th, ph = _grid_angles(inst)
-    E = hamiltonian_energy(th, ph, inst, params)["encoding"]
-    levels = np.unique(np.round(np.asarray(E, dtype=np.float64), 9))
+    tab = node_energy_table(inst, ops, params)
+    levels = np.unique(np.round(tab["energies"].reshape(-1), 9))
     gap = float(levels[1] - levels[0]) if levels.size > 1 else float("inf")
     budget = max(float(photon_budget), 1e-9)
     ceiling = gap / budget
@@ -392,671 +480,606 @@ def suggest_lambda_exc(inst: VRPInstance, params: Optional[HamiltonianParams] = 
             "lambda_exc_suggested": float(min(0.01, max(0.001, 0.1 * ceiling))),
             "num_energy_levels": int(levels.size)}
 
-
 # ---------------------------------------------------------------------------
-# Decodificação e custo clássico
+# 4. Camada de operadores (numpy float64, construída UMA vez)
 # ---------------------------------------------------------------------------
-def decode(theta: Sequence[float], phi: Sequence[float], inst: VRPInstance) -> Dict[str, object]:
-    """Arredonda (θ, φ) para o nó mais próximo e monta as rotas.
+def _hermitian(A: np.ndarray) -> np.ndarray:
+    return 0.5 * (A + A.conj().T)
 
-    Retorna slots (v, r) 0-based por cidade e as rotas com nós 1..N,
-    ordenadas pela posição. Colisões são mantidas na ordem da cidade.
+
+def _psd_sqrt(A: np.ndarray, tol: float = 0.0) -> np.ndarray:
+    """Raiz PSD por decomposição espectral, com autovalores negativos zerados.
+
+    Feita em float64 e CONGELADA: nunca diferencie através desta função.
     """
-    theta = np.asarray(theta, dtype=np.float64)
-    phi = np.asarray(phi, dtype=np.float64)
-    r = np.mod(np.rint(theta * inst.R / (2 * np.pi)).astype(int), inst.R)
-    v = np.mod(np.rint(phi * inst.M / (2 * np.pi)).astype(int), inst.M)
+    w, V = np.linalg.eigh(_hermitian(A))
+    w = np.clip(w.real, tol, None)
+    return (V * np.sqrt(w)) @ V.conj().T
+
+
+def displacement_operator(cutoff: int, alpha: complex) -> np.ndarray:
+    """D(alpha) = exp(alpha a^dag - alpha* a), truncado, elementos EXATOS.
+
+    <m|D(alpha)|n> = sqrt(n!/m!) alpha^(m-n) e^{-|alpha|^2/2} L_n^(m-n)(|alpha|^2)
+    para m >= n, e o conjugado-transposto com -alpha* no caso n > m, onde
+    L_n^(k) é o polinômio de Laguerre associado.
+
+    Esta é a truncagem do operador exato, e não a exponencial de uma matriz já
+    truncada. A diferença não é cosmética: é ela que preserva [U, V] = 0 no
+    subespaço de baixa energia.
+    """
+    from scipy.special import eval_genlaguerre
+
+    n = np.arange(cutoff)
+    r2 = float(abs(alpha) ** 2)
+    # log-fatoriais evitam overflow em cutoff alto
+    logfact = np.concatenate([[0.0], np.cumsum(np.log(np.arange(1, cutoff)))])
+    D = np.zeros((cutoff, cutoff), dtype=np.complex128)
+    for nn in range(cutoff):
+        for mm in range(cutoff):
+            if mm >= nn:
+                k = mm - nn
+                pref = math.exp(0.5 * (logfact[nn] - logfact[mm]))
+                val = pref * (alpha ** k) * eval_genlaguerre(nn, k, r2)
+            else:
+                k = nn - mm
+                pref = math.exp(0.5 * (logfact[mm] - logfact[nn]))
+                val = pref * ((-np.conj(alpha)) ** k) * eval_genlaguerre(mm, k, r2)
+            D[mm, nn] = val
+    return D * math.exp(-r2 / 2.0)
+
+
+def fejer_operator(W: np.ndarray, K: int, node_index: int) -> np.ndarray:
+    """Núcleo de Fejér de ordem K centrado no nó 2*pi*node_index/K.
+
+    F_j = (1/K^2) [ K I + sum_{m=1}^{K-1} (K-m) ( e^{-i m nodo} W^m + h.c. ) ]
+
+    Fejér e não Dirichlet porque é não negativo: os F_j são PSD e somam a
+    identidade, o que os torna um POVM legítimo sobre os nós.
+    """
+    d = W.shape[0]
+    I = np.eye(d, dtype=np.complex128)
+    if K == 1:
+        return I
+    node = 2.0 * math.pi * node_index / K
+    out = float(K) * I
+    Wm = I.copy()
+    for m in range(1, K):
+        Wm = Wm @ W
+        term = np.exp(-1j * m * node) * Wm
+        out = out + (K - m) * (term + term.conj().T)
+    return _hermitian(out / float(K * K))
+
+
+@dataclass
+class ModularOperators:
+    """Operadores de um modo, fixos dados (cutoff, M, R, hbar)."""
+    cutoff: int
+    M: int
+    R: int
+    hbar: float
+    a: float
+    b: float
+    U: np.ndarray                  # exp(i 2pi x / a)
+    V: np.ndarray                  # exp(i 2pi p / b)
+    F: np.ndarray                  # (R, d, d) nós de posição
+    G: np.ndarray                  # (M, d, d) nós de veículo
+    A: np.ndarray                  # (M, R, d, d) efeitos do POVM
+    P_vehicle: np.ndarray          # (M, d, d) marginal por veículo
+    H_disc: np.ndarray             # 2I - cos(R theta) - cos(M phi)
+    n_op: np.ndarray               # operador número (diagonal)
+
+    def weyl_commutator(self, block: Optional[int] = None) -> float:
+        """||UV - VU||_2, opcionalmente só no bloco inferior de dimensão `block`.
+
+        No espaço todo o valor fica alto em qualquer cutoff, porque a truncagem
+        quebra a relação canônica nos níveis mais altos. O que converge — e o
+        que importa — é o bloco de baixa energia.
+        """
+        C = self.U @ self.V - self.V @ self.U
+        if block:
+            C = C[:block, :block]
+        return float(np.linalg.norm(C, 2))
+
+    def completeness_error(self) -> float:
+        """||sum_{v,r} A_{v,r} - I||_2. Deve ser ~1e-15."""
+        return float(np.linalg.norm(self.A.sum(axis=(0, 1)) - np.eye(self.cutoff), 2))
+
+    def min_eigenvalue(self) -> float:
+        """Menor autovalor entre todos os A_{v,r}. Deve ser >= ~ -1e-15 (PSD)."""
+        return float(min(np.linalg.eigvalsh(self.A[v, r]).min()
+                         for v in range(self.M) for r in range(self.R)))
+
+    def diagnostics(self) -> Dict[str, float]:
+        d = self.cutoff
+        return {"weyl_full": self.weyl_commutator(),
+                "weyl_half": self.weyl_commutator(max(2, d // 2)),
+                "weyl_quarter": self.weyl_commutator(max(2, d // 4)),
+                "completeness": self.completeness_error(),
+                "povm_min_eigenvalue": self.min_eigenvalue()}
+
+
+_OPS_CACHE: Dict[tuple, ModularOperators] = {}
+
+
+def build_modular_operators(cutoff: int, M: int, R: int, hbar: float = 2.0,
+                            use_cache: bool = True) -> ModularOperators:
+    """Monta os operadores modulares. Resultado em float64, cacheado."""
+    key = (int(cutoff), int(M), int(R), float(hbar))
+    if use_cache and key in _OPS_CACHE:
+        return _OPS_CACHE[key]
+
+    a = math.sqrt(2.0 * math.pi * hbar)
+    b = 2.0 * math.pi * hbar / a
+
+    # x = sqrt(hbar/2)(adag + a)  =>  exp(i k x) = D(i k sqrt(hbar/2))
+    # p = i sqrt(hbar/2)(adag - a) =>  exp(i k' p) = D(-k' sqrt(hbar/2))
+    s = math.sqrt(hbar / 2.0)
+    U = displacement_operator(cutoff, 1j * (2.0 * math.pi / a) * s)
+    V = displacement_operator(cutoff, -(2.0 * math.pi / b) * s)
+
+    F = np.stack([fejer_operator(U, R, r) for r in range(R)])
+    G = np.stack([fejer_operator(V, M, v) for v in range(M)])
+    sqrtF = [_psd_sqrt(F[r]) for r in range(R)]
+
+    # A_{v,r} = sqrt(F_r) G_v sqrt(F_r): hermitiano e PSD por construção.
+    # O produto simples F_r G_v não seria nem um nem outro, porque no cutoff
+    # finito [F_r, G_v] != 0, e a leitura probabilística se perderia.
+    A = np.stack([np.stack([_hermitian(sqrtF[r] @ G[v] @ sqrtF[r])
+                            for r in range(R)]) for v in range(M)])
+
+    UR = np.linalg.matrix_power(U, R)
+    VM = np.linalg.matrix_power(V, M)
+    I = np.eye(cutoff, dtype=np.complex128)
+    H_disc = _hermitian(2.0 * I - 0.5 * (UR + UR.conj().T) - 0.5 * (VM + VM.conj().T))
+
+    ops = ModularOperators(cutoff=cutoff, M=M, R=R, hbar=hbar, a=a, b=b,
+                           U=U, V=V, F=F, G=G, A=A, P_vehicle=A.sum(axis=1),
+                           H_disc=H_disc,
+                           n_op=np.diag(np.arange(cutoff)).astype(np.complex128))
+    if use_cache:
+        _OPS_CACHE[key] = ops
+    return ops
+
+
+def operators_for(inst: VRPInstance, cutoff: int) -> ModularOperators:
+    return build_modular_operators(cutoff, inst.M, inst.R, inst.hbar)
+
+
+# ---------------------------------------------------------------------------
+# 5. Avaliação da energia — um algoritmo, dois backends
+# ---------------------------------------------------------------------------
+class _NumpyBackend:
+    """Backend de referência: float64/complex128. Padrão-ouro."""
+    name = "numpy"
+
+    @staticmethod
+    def const(A, like=None):
+        return np.asarray(A, dtype=np.complex128)
+
+    @staticmethod
+    def apply_local(psi, op, mode):
+        N = psi.ndim
+        out = np.tensordot(psi, op, axes=([mode], [1]))
+        perm = list(range(mode)) + [N - 1] + list(range(mode, N - 1))
+        return np.transpose(out, perm)
+
+    @staticmethod
+    def inner_real(psi, phi):
+        return float(np.real(np.sum(np.conj(psi) * phi)))
+
+    @staticmethod
+    def abs2(psi):
+        return np.abs(psi) ** 2
+
+    @staticmethod
+    def sum_all(x):
+        return float(np.sum(x))
+
+    @staticmethod
+    def zeros_like_scalar(psi):
+        return 0.0
+
+
+class _TFBackend:
+    """Backend TensorFlow: o gradiente flui pelo estado, nunca pelos operadores.
+
+    Os operadores entram como constantes complex64. Nunca use tf.cast de um
+    complexo para float: isso descarta a parte imaginária em silêncio. Use
+    tf.math.real no ÚLTIMO passo, e tf.abs para probabilidades.
+    """
+    name = "tf"
+
+    def __init__(self):
+        import tensorflow as tf
+        self.tf = tf
+
+    def const(self, A, like=None):
+        """Converte um operador em constante TF.
+
+        SEM cache por id(): ops.A[v, r] devolve uma VIEW temporária do array
+        4-D, e depois que esta função retorna o id pode ser reaproveitado pela
+        próxima view — o cache então entregava o operador errado. Os
+        operadores são matrizes d x d; converter a cada chamada é desprezível
+        perto das contrações sobre o tensor d^N.
+        """
+        tf = self.tf
+        dtype = like.dtype if like is not None else tf.complex64
+        return tf.constant(np.asarray(A, dtype=np.complex128), dtype=dtype)
+
+    def apply_local(self, psi, op, mode):
+        tf = self.tf
+        N = len(psi.shape)
+        out = tf.tensordot(psi, op, axes=[[mode], [1]])
+        perm = list(range(mode)) + [N - 1] + list(range(mode, N - 1))
+        return tf.transpose(out, perm)
+
+    def inner_real(self, psi, phi):
+        tf = self.tf
+        return tf.math.real(tf.reduce_sum(tf.math.conj(psi) * phi))
+
+    def abs2(self, psi):
+        return self.tf.square(self.tf.abs(psi))
+
+    def sum_all(self, x):
+        return self.tf.reduce_sum(x)
+
+    def zeros_like_scalar(self, psi):
+        return self.tf.cast(0.0, self.tf.float32 if psi.dtype == self.tf.complex64
+                            else self.tf.float64)
+
+
+def _get_backend(psi):
+    if isinstance(psi, np.ndarray):
+        return _NumpyBackend()
+    return _TFBackend()
+
+
+def _occupancy(bk, psi, A_const, v, r, N):
+    """n_{v,r} psi = sum_i A^{(i)}_{v,r} psi."""
+    out = None
+    for i in range(N):
+        t = bk.apply_local(psi, A_const[v][r], i)
+        out = t if out is None else out + t
+    return out
+
+
+def energy_components(psi, inst: VRPInstance, ops: ModularOperators,
+                      params: Optional[HamiltonianParams] = None,
+                      require_all_vehicles: Optional[bool] = None,
+                      normalize: bool = True) -> Dict[str, object]:
+    """<psi|H|psi> decomposto por termo.
+
+    psi: tensor de posto N (um eixo por cidade), numpy OU tensorflow. O backend
+    é detectado pelo tipo; o algoritmo é o mesmo.
+
+    Chaves devolvidas:
+      dist, col, gap, vehicle, capacity, disc   componentes ponderadas
+      encoding   soma das acima — comparável com C* e com as linhas de base
+      exc        lambda_exc * sum_i <n_i>
+      mean_photons  sum_i <n_i>, sem peso
+      total      encoding + exc — é o que o VQE minimiza
+      state_norm2  norma bruta de psi ANTES da normalização (diagnóstico de
+                   truncagem: deve ficar >= 0.99)
+    """
+    params = params or HamiltonianParams()
+    bk = _get_backend(psi)
+    N, M, R = inst.N, inst.M, inst.R
+    req_all = requires_all_vehicles(params, require_all_vehicles)
+
+    raw = bk.inner_real(psi, psi)
+    if normalize:
+        if isinstance(psi, np.ndarray):
+            psi = psi / math.sqrt(max(float(raw), 1e-300))
+        else:
+            tf = bk.tf
+            psi = psi / tf.cast(tf.sqrt(tf.maximum(raw, 1e-30)), psi.dtype)
+
+    A = [[bk.const(ops.A[v, r], like=psi) for r in range(R)] for v in range(M)]
+    D = np.asarray(inst.D, dtype=np.float64)
+
+    # --- distância ---------------------------------------------------------
+    h_dist = bk.zeros_like_scalar(psi)
+    for v in range(M):                                   # depósito -> primeira
+        for i in range(N):
+            h_dist = h_dist + float(D[0, i + 1]) * bk.inner_real(psi, bk.apply_local(psi, A[v][0], i))
+    for v in range(M):                                   # arcos internos
+        for r in range(R - 1):
+            for i in range(N):
+                Ai = bk.apply_local(psi, A[v][r], i)
+                for j in range(N):
+                    if i == j:
+                        continue
+                    h_dist = h_dist + float(D[i + 1, j + 1]) * bk.inner_real(
+                        psi, bk.apply_local(Ai, A[v][r + 1], j))
+    for v in range(M):                                   # última -> depósito
+        for r in range(R - 1):
+            # custo, não penalidade: anticomutador {A, I - n}/2, hermitiano.
+            # <{X,Y}/2> = Re<X psi|Y psi> para X, Y hermitianos.
+            Bpsi = psi - _occupancy(bk, psi, A, v, r + 1, N)
+            for i in range(N):
+                h_dist = h_dist + float(D[i + 1, 0]) * bk.inner_real(
+                    bk.apply_local(psi, A[v][r], i), Bpsi)
+        for i in range(N):
+            h_dist = h_dist + float(D[i + 1, 0]) * bk.inner_real(
+                psi, bk.apply_local(psi, A[v][R - 1], i))
+
+    # --- colisão: modos distintos, comutam, sem ambiguidade ----------------
+    h_col = bk.zeros_like_scalar(psi)
+    for v in range(M):
+        for r in range(R):
+            for i in range(N):
+                Ai = bk.apply_local(psi, A[v][r], i)
+                for j in range(i + 1, N):
+                    h_col = h_col + bk.inner_real(psi, bk.apply_local(Ai, A[v][r], j))
+
+    # --- lacuna: PENALIDADE -> sanduíche B n B ------------------------------
+    h_gap = bk.zeros_like_scalar(psi)
+    for v in range(M):
+        for r in range(1, R):
+            Bpsi = float(r) * psi
+            for q in range(r):
+                Bpsi = Bpsi - _occupancy(bk, psi, A, v, q, N)
+            # <B n B> = <B psi| n |B psi> >= 0 porque n é PSD
+            for i in range(N):
+                h_gap = h_gap + bk.inner_real(Bpsi, bk.apply_local(Bpsi, A[v][r], i))
+
+    # --- veículos obrigatórios: ||(n - I) psi||^2 ---------------------------
+    h_veh = bk.zeros_like_scalar(psi)
+    if req_all:
+        for v in range(M):
+            y = _occupancy(bk, psi, A, v, 0, N) - psi
+            h_veh = h_veh + bk.inner_real(y, y)
+
+    # --- capacidade: cálculo funcional espectral exato ----------------------
+    h_cap = bk.zeros_like_scalar(psi)
+    if params.lambda_cap > 0:
+        if inst.demands is None or inst.Q is None:
+            raise ValueError("λ_cap > 0 exige demands e Q na instância.")
+        for v in range(M):
+            evals, evecs = np.linalg.eigh(_hermitian(ops.P_vehicle[v]))
+            Vh = bk.const(evecs.conj().T, like=psi)
+            coeff = psi
+            for i in range(N):
+                coeff = bk.apply_local(coeff, Vh, i)
+            # L_v = sum_i q_i P_v^(i): termos em modos distintos, comutam
+            load = np.zeros((evals.size,) * N, dtype=np.float64)
+            for i in range(N):
+                shape = [1] * N
+                shape[i] = evals.size
+                load = load + float(inst.demands[i]) * evals.real.reshape(shape)
+            excess2 = np.maximum(load - float(inst.Q[v]), 0.0) ** 2
+            w = (excess2 if isinstance(psi, np.ndarray)
+                 else _tf_real_const(bk, excess2, psi))
+            h_cap = h_cap + bk.sum_all(bk.abs2(coeff) * w)
+
+    # --- estabilizador e excitação -----------------------------------------
+    Hd = bk.const(ops.H_disc, like=psi)
+    h_disc = bk.zeros_like_scalar(psi)
+    for i in range(N):
+        h_disc = h_disc + bk.inner_real(psi, bk.apply_local(psi, Hd, i))
+
+    nop = bk.const(ops.n_op, like=psi)
+    photons = bk.zeros_like_scalar(psi)
+    for i in range(N):
+        photons = photons + bk.inner_real(psi, bk.apply_local(psi, nop, i))
+
+    out = {"dist": params.lambda_dist * h_dist,
+           "col": params.lambda_col * h_col,
+           "gap": params.lambda_gap * h_gap,
+           "vehicle": params.lambda_vehicle * h_veh,
+           "capacity": params.lambda_cap * h_cap,
+           "disc": params.lambda_disc * h_disc}
+    encoding = out["dist"] + out["col"] + out["gap"] + out["vehicle"] + out["capacity"] + out["disc"]
+    out["encoding"] = encoding
+    out["mean_photons"] = photons
+    out["exc"] = params.lambda_exc * photons
+    out["total"] = encoding + out["exc"]
+    out["state_norm2"] = raw
+    return out
+
+
+def _tf_real_const(bk, arr, like):
+    tf = bk.tf
+    dt = tf.float32 if like.dtype == tf.complex64 else tf.float64
+    return tf.constant(np.asarray(arr, dtype=np.float64), dtype=dt)
+
+
+def assignment_distribution(psi, inst: VRPInstance, ops: ModularOperators) -> np.ndarray:
+    """p(configuração) = <psi| prod_i A_{v_i, r_i}^{(i)} |psi>, forma (M*R,)*N.
+
+    Como sum_{v,r} A_{v,r} = I e cada A é PSD, estas probabilidades somam 1 e
+    são não negativas: é a leitura do POVM. Substitui a amostragem da
+    distribuição de Zak na decodificação.
+    """
+    psi = np.asarray(psi)
+    psi = psi / np.linalg.norm(psi)
+    N, M, R = inst.N, inst.M, inst.R
+    bk = _NumpyBackend()
+    out = np.zeros((M * R,) * N, dtype=np.float64)
+    for slots in itertools.product(range(M * R), repeat=N):
+        phi = psi
+        for i, s in enumerate(slots):
+            v, r = divmod(s, R)
+            phi = bk.apply_local(phi, ops.A[v, r], i)
+        out[slots] = max(0.0, bk.inner_real(psi, phi))
+    tot = out.sum()
+    return out / tot if tot > 0 else out
+
+
+def decode_distribution(dist: np.ndarray, inst: VRPInstance, top: int = 1):
+    """Converte a distribuição do POVM em rotas, da mais provável para a menos."""
+    R = inst.R
+    flat = np.argsort(dist.reshape(-1))[::-1][:top]
+    out = []
+    for f in flat:
+        slots = np.unravel_index(f, dist.shape)
+        v = np.array([s // R for s in slots])
+        r = np.array([s % R for s in slots])
+        routes: List[List[int]] = []
+        for veh in range(inst.M):
+            cities = [i for i in range(inst.N) if v[i] == veh]
+            cities.sort(key=lambda i: (r[i], i))
+            routes.append([i + 1 for i in cities])
+        out.append({"probability": float(dist.reshape(-1)[f]),
+                    "position": r, "vehicle": v, "routes": routes,
+                    "cost": routes_cost(routes, inst.D)})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 6. Verificação exata — sempre em numpy float64
+# ---------------------------------------------------------------------------
+def node_state(ops: ModularOperators, v: int, r: int) -> np.ndarray:
+    """Melhor estado de um modo para o nó (v, r): autovetor dominante de A_{v,r}.
+
+    No limite de cutoff infinito este seria um estado de Zak perfeitamente
+    localizado no nó. No cutoff finito é o estado representável que mais se
+    aproxima disso, e o autovalor associado mede quão perto.
+    """
+    w, V = np.linalg.eigh(_hermitian(ops.A[v, r]))
+    return V[:, -1]
+
+
+def node_energy_table(inst: VRPInstance, ops: ModularOperators,
+                      params: Optional[HamiltonianParams] = None,
+                      require_all_vehicles: Optional[bool] = None,
+                      max_configs: int = 2_000_000) -> Dict[str, object]:
+    """<H> em estados-produto centrados em cada configuração de nós.
+
+    Análogo direto do antigo brute_force_grid: percorre as (M*R)^N
+    configurações e devolve a energia de cada uma. O argmin deve decodificar
+    para a solução ótima clássica.
+    """
+    N, M, R = inst.N, inst.M, inst.R
+    size = (M * R) ** N
+    if size > max_configs:
+        raise MemoryError(f"(M·R)^N = {size:,} excede max_configs={max_configs:,}.")
+    params = params or HamiltonianParams()
+    kets = {(v, r): node_state(ops, v, r) for v in range(M) for r in range(R)}
+
+    energies = np.empty((M * R,) * N, dtype=np.float64)
+    for slots in itertools.product(range(M * R), repeat=N):
+        psi = None
+        for s in slots:
+            v, r = divmod(s, R)
+            psi = kets[(v, r)] if psi is None else np.multiply.outer(psi, kets[(v, r)])
+        e = energy_components(psi, inst, ops, params, require_all_vehicles)
+        energies[slots] = float(e["encoding"])
+
+    flat = int(np.argmin(energies))
+    slots = np.unravel_index(flat, energies.shape)
+    v = np.array([s // R for s in slots])
+    r = np.array([s % R for s in slots])
     routes: List[List[int]] = []
-    for veh in range(inst.M):
-        cities = [i for i in range(inst.N) if v[i] == veh]
+    for veh in range(M):
+        cities = [i for i in range(N) if v[i] == veh]
         cities.sort(key=lambda i: (r[i], i))
         routes.append([i + 1 for i in cities])
-    return {"position": r, "vehicle": v, "routes": routes}
+    return {"energies": energies, "min_energy": float(energies.min()),
+            "argmin_slots": slots, "routes": routes,
+            "cost": routes_cost(routes, inst.D), "size": size}
 
 
-def routes_cost(routes: Sequence[Sequence[int]], D: np.ndarray) -> float:
-    """Custo clássico: depósito -> rota -> depósito, rotas vazias custam 0."""
-    total = 0.0
-    for route in routes:
-        if not route:
-            continue
-        nodes = [0, *route, 0]
-        total += sum(D[nodes[k], nodes[k + 1]] for k in range(len(nodes) - 1))
-    return float(total)
+def dense_hamiltonian(inst: VRPInstance, ops: ModularOperators,
+                      params: Optional[HamiltonianParams] = None,
+                      require_all_vehicles: Optional[bool] = None,
+                      max_dim: int = 30_000) -> np.ndarray:
+    """Matriz densa de H no espaço de Fock truncado, dimensão cutoff^N.
 
-
-def is_feasible(decoded: Dict[str, object], inst: VRPInstance,
-                require_all_vehicles: bool = False, use_capacity: bool = False) -> bool:
-    """Viabilidade da solução decodificada (sem colisão, sem lacuna, capacidade)."""
-    r, v = decoded["position"], decoded["vehicle"]
-    slots = list(zip(v, r))
-    if len(set(slots)) != len(slots):
-        return False
-    for veh in range(inst.M):
-        pos = sorted(int(r[i]) for i in range(inst.N) if v[i] == veh)
-        if pos != list(range(len(pos))):
-            return False
-        if require_all_vehicles and not pos:
-            return False
-        if use_capacity:
-            load = sum(inst.demands[i] for i in range(inst.N) if v[i] == veh)
-            if load > inst.Q[veh] + 1e-9:
-                return False
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Verificações clássicas
-# ---------------------------------------------------------------------------
-def _grid_angles(inst: VRPInstance) -> Tuple[np.ndarray, np.ndarray]:
-    """Todas as (M·R)^N configurações da grade; índice por cidade s = v·R + r."""
-    S = inst.M * inst.R
-    idx = np.array(list(itertools.product(range(S), repeat=inst.N)), dtype=int)
-    r, v = idx % inst.R, idx // inst.R
-    return 2 * np.pi * r / inst.R, 2 * np.pi * v / inst.M
-
-
-def ideal_energy_table(inst: VRPInstance, params: Optional[HamiltonianParams] = None,
-                       max_size: int = 5_000_000) -> np.ndarray:
-    """Energias de todas as configurações da grade (limite ideal de Zak).
-
-    Vetor de tamanho (M·R)^N, ordenado como um registrador de qudits de
-    dimensão M·R (cidade 1 no dígito mais significativo, s = v·R + r).
-    É a diagonal do Hamiltoniano de custo para simular o QAOA ideal.
+    Só para verificação: o fundamental decodificado deve ser a rota ótima. É a
+    afirmação mais forte possível, porque o fundamental é o mínimo sobre TODOS
+    os estados — não existe mínimo espúrio, dentro ou fora dos nós.
     """
-    size = (inst.M * inst.R) ** inst.N
-    if size > max_size:
-        raise MemoryError(f"(M·R)^N = {size} configurações excede max_size.")
-    th, ph = _grid_angles(inst)
-    return hamiltonian_energy(th, ph, inst, params)["total"]
+    params = params or HamiltonianParams()
+    d, N, M, R = ops.cutoff, inst.N, inst.M, inst.R
+    dim = d ** N
+    if dim > max_dim:
+        raise MemoryError(f"cutoff^N = {dim:,} excede max_dim={max_dim:,}; "
+                          "use scipy.sparse.linalg.eigsh sobre um operador-função.")
+    req_all = requires_all_vehicles(params, require_all_vehicles)
+    I = np.eye(dim, dtype=np.complex128)
 
-
-def brute_force_grid(inst: VRPInstance, params: Optional[HamiltonianParams] = None,
-                     top: int = 5) -> Dict[str, object]:
-    """Mínimo do Hamiltoniano na grade e as `top` configurações de menor energia."""
-    th, ph = _grid_angles(inst)
-    E = hamiltonian_energy(th, ph, inst, params)["total"]
-    order = np.argsort(E, kind="stable")
-    emin = float(E[order[0]])
-    best = []
-    for k in order[:top]:
-        dec = decode(th[k], ph[k], inst)
-        best.append({"energy": float(E[k]), "routes": dec["routes"],
-                     "cost": routes_cost(dec["routes"], inst.D)})
-    return {"min_energy": emin,
-            "degeneracy": int(np.sum(np.isclose(E, emin))),
-            "best": best}
-
-
-def continuous_minimum(inst: VRPInstance, params: Optional[HamiltonianParams] = None,
-                       n_starts: int = 200, seed: int = 0) -> Dict[str, object]:
-    """Mínimo de F no toro T^{2N} por múltiplos pontos iniciais (L-BFGS-B).
-
-    Deve coincidir com o mínimo da grade; se ficar abaixo, aumente λ_disc.
-    Heurístico: não garante o mínimo global.
-    """
-    from scipy.optimize import minimize
-
-    rng = np.random.default_rng(seed)
-    N = inst.N
-
-    def f(u: np.ndarray) -> float:
-        return float(hamiltonian_energy(u[:N], u[N:], inst, params)["total"])
-
-    best = None
-    for _ in range(n_starts):
-        res = minimize(f, rng.uniform(0, 2 * np.pi, 2 * N), method="L-BFGS-B")
-        if best is None or res.fun < best.fun:
-            best = res
-    u = np.mod(best.x, 2 * np.pi)
-    return {"min_energy": float(best.fun), "theta": u[:N], "phi": u[N:],
-            "decoded": decode(u[:N], u[N:], inst)}
-
-
-# ---------------------------------------------------------------------------
-# Estimativa a partir de amostras
-# ---------------------------------------------------------------------------
-def estimate_from_samples(
-    x_samples: np.ndarray,
-    p_samples: np.ndarray,
-    inst: VRPInstance,
-    params: Optional[HamiltonianParams] = None,
-    require_all_vehicles: bool = False,
-    use_capacity: bool = False,
-) -> Dict[str, object]:
-    """Estimador amostral de ⟨H⟩ (análogo à eq. 10 do Madani) e melhor rota.
-
-    x_samples, p_samples: (shots, N).
-
-    ATENÇÃO: x e p de uma mesma linha precisam vir do MESMO disparo, por
-    medição conjunta de (x mod a, p mod b). Parear resultados de disparos
-    homodinos separados destrói a correlação posição–veículo e enviesa a
-    estimativa quando o estado não está concentrado numa única configuração.
-    """
-    x_samples = np.atleast_2d(x_samples)
-    p_samples = np.atleast_2d(p_samples)
-    th, ph = quadratures_to_angles(x_samples, p_samples, inst)
-    E = hamiltonian_energy(th, ph, inst, params)["total"]
-
-    best_cost, best_routes, n_feasible = math.inf, None, 0
-    for k in range(th.shape[0]):
-        dec = decode(th[k], ph[k], inst)
-        if is_feasible(dec, inst, require_all_vehicles, use_capacity):
-            n_feasible += 1
-            c = routes_cost(dec["routes"], inst.D)
-            if c < best_cost:
-                best_cost, best_routes = c, dec["routes"]
-    shots = th.shape[0]
-    return {"mean_energy": float(E.mean()),
-            "std_error": float(E.std(ddof=1) / math.sqrt(shots)) if shots > 1 else math.nan,
-            "feasible_fraction": n_feasible / shots,
-            "best_cost": best_cost, "best_routes": best_routes}
-
-
-# ---------------------------------------------------------------------------
-# Valor esperado exato a partir de um ket de Fock (distribuição de Zak)
-# ---------------------------------------------------------------------------
-def hermite_functions(cutoff: int, x: np.ndarray, hbar: float = 2.0) -> np.ndarray:
-    """⟨x|n⟩ para n < cutoff, convenção x̂ = sqrt(ħ/2)(â + â†). Retorna (cutoff, len(x))."""
-    x = np.asarray(x, dtype=np.float64)
-    u = x / math.sqrt(hbar)
-    out = np.zeros((cutoff, x.size))
-    out[0] = (math.pi * hbar) ** -0.25 * np.exp(-u**2 / 2.0)
-    if cutoff > 1:
-        out[1] = math.sqrt(2.0) * u * out[0]
-    for n in range(1, cutoff - 1):
-        out[n + 1] = math.sqrt(2.0 / (n + 1)) * u * out[n] - math.sqrt(n / (n + 1)) * out[n - 1]
-    return out
-
-
-def _zak_grid(inst: VRPInstance, cutoff: int, G: int, n_cells: Optional[int]) -> Tuple[int, int, np.ndarray]:
-    G = inst.R * max(1, math.ceil(G / inst.R))           # θ-grid contém os nós de posição
-    xmax = 1.2 * math.sqrt(2.0 * inst.hbar * (cutoff + 1))
-    need = 2 * math.ceil(xmax / inst.a) + 2
-    Nc = max(need, n_cells or 0)
-    Nc = inst.M * math.ceil(Nc / inst.M)                 # p-grid contém os nós de veículo
-    x = (np.arange(Nc)[:, None] - Nc // 2 + np.arange(G)[None, :] / G) * inst.a
-    return Nc, G, x.reshape(-1)
-
-
-def zak_distribution_from_ket(ket: np.ndarray, inst: VRPInstance, G: int = 8,
-                              n_cells: Optional[int] = None) -> Dict[str, object]:
-    """Distribuição conjunta discreta de (θ_i, φ_i) para um ket de Fock com N modos.
-
-    Z(x0, p) = Σ_n e^{-i p n a/ħ} ψ(x0 + n a),  p ∈ [0, b)  (FFT nas células).
-    Retorna P com eixos (k_1, g_1, ..., k_N, g_N): k indexa φ = 2πk/Nc e
-    g indexa θ = 2πg/G.  Custo de memória ~ (Nc·G)^N: use só para N pequeno.
-    """
-    ket = np.asarray(ket)
-    if ket.ndim != inst.N:
-        raise ValueError(f"ket deve ter {inst.N} eixos (um por cidade).")
-    cutoff = ket.shape[0]
-    Nc, G, x = _zak_grid(inst, cutoff, G, n_cells)
-    phi_n = hermite_functions(cutoff, x, inst.hbar)       # (cutoff, Nc·G)
-
-    psi = ket.astype(np.complex128)
-    for _ in range(inst.N):                               # contrai eixo 0 e anexa x no fim
-        psi = np.tensordot(psi, phi_n, axes=([0], [0]))
-    psi = psi.reshape(sum(((Nc, G) for _ in range(inst.N)), ()))
-    Z = np.fft.fftn(psi, axes=tuple(range(0, 2 * inst.N, 2)))
-    P = np.abs(Z) ** 2
-    P /= P.sum()
-    return {"P": P, "Nc": Nc, "G": G}
-
-
-def _points_from_index(idx: Tuple[np.ndarray, ...], Nc: int, G: int, N: int) -> Tuple[np.ndarray, np.ndarray]:
-    k = np.stack(idx[0::2], axis=-1)
-    g = np.stack(idx[1::2], axis=-1)
-    return 2 * np.pi * g / G, 2 * np.pi * k / Nc
-
-
-def expectation_from_distribution(dist: Dict[str, object], inst: VRPInstance,
-                                  params: Optional[HamiltonianParams] = None,
-                                  chunk: int = 200_000, tol: float = 1e-12) -> Dict[str, float]:
-    """⟨H⟩ = Σ P(θ, φ) F(θ, φ), por componente (soma em blocos)."""
-    P, Nc, G = dist["P"], dist["Nc"], dist["G"]
-    flat = np.flatnonzero(P > tol * P.max())
-    acc: Dict[str, float] = {}
-    for s in range(0, flat.size, chunk):
-        ids = flat[s:s + chunk]
-        th, ph = _points_from_index(np.unravel_index(ids, P.shape), Nc, G, inst.N)
-        w = P.reshape(-1)[ids]
-        for key, val in hamiltonian_energy(th, ph, inst, params).items():
-            acc[key] = acc.get(key, 0.0) + float(np.dot(w, val))
-    norm = float(P.reshape(-1)[flat].sum())
-    return {key: val / norm for key, val in acc.items()}
-
-
-def sample_from_distribution(dist: Dict[str, object], inst: VRPInstance, shots: int,
-                             seed: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
-    """Amostras ideais de (x mod a, p mod b) com a distribuição de Zak."""
-    rng = np.random.default_rng(seed)
-    P, Nc, G = dist["P"], dist["Nc"], dist["G"]
-    ids = rng.choice(P.size, size=shots, p=P.reshape(-1))
-    th, ph = _points_from_index(np.unravel_index(ids, P.shape), Nc, G, inst.N)
-    return th * inst.a / (2 * np.pi), ph * inst.b / (2 * np.pi)
-
-
-# ---------------------------------------------------------------------------
-# Integração com solver.py / run.py (Strawberry Fields, backend Fock)
-# ---------------------------------------------------------------------------
-_MAX_GRID_POINTS = int(os.environ.get("QUMODES_MAX_GRID_POINTS", 30_000_000))
-_EVALUATOR_CACHE: Dict[tuple, "ZakEvaluator"] = {}
-
-
-def auto_positions(N: int, M: int, demands: Optional[np.ndarray], Q: Optional[object],
-                   require_all_vehicles: bool = False) -> int:
-    """Posições por veículo (limites que valem para QUALQUER solução viável).
-
-    - capacidade: nenhum veículo leva mais que floor(max Q / menor demanda) cidades;
-    - todos os veículos obrigatórios: nenhum leva mais que N − M + 1 cidades.
-    Menos posições significam slots mais espaçados em x (melhor resolução por cutoff).
-    """
-    R = N
-    if demands is not None and Q is not None:
-        d = np.asarray(demands, dtype=np.float64).reshape(-1)
-        if d.size == N + 1:
-            d = d[1:]
-        pos = d[d > 0]
-        if pos.size:
-            R = min(R, int(math.floor(float(np.max(Q)) / float(pos.min()) + 1e-9)))
-    if require_all_vehicles and M > 1:
-        R = min(R, N - M + 1)
-    R = max(1, R)
-    if M * R < N:           # instância inviável pela contagem; mantém N para não mascarar
-        return N
-    return R
-
-
-def requires_all_vehicles(params: Optional["HamiltonianParams"],
-                          require_all_vehicles: Optional[bool] = None) -> bool:
-    """Regra única do pacote: explícito se informado; senão, lambda_vehicle > 0."""
-    if require_all_vehicles is not None:
-        return bool(require_all_vehicles)
-    return bool(params is not None and params.lambda_vehicle > 0)
-
-
-def vehicle_penalty_bound(D: np.ndarray) -> float:
-    """λ_vehicle suficiente para que veículos vazios nunca compensem.
-
-    Toda solução com um veículo vazio pode ganhar esse veículo destacando uma
-    cidade x de uma rota com >= 2 cidades; o custo sobe no máximo
-    d(prev, next) + d(0, x) + d(x, 0) <= max d_ij + max d_0i + max d_i0.
-    """
-    D = np.asarray(D, dtype=np.float64)
-    return float(D[1:, 1:].max() + D[0, 1:].max() + D[1:, 0].max())
-
-
-def instance_from_legacy(N: int, M: int, D: np.ndarray, demands: Optional[np.ndarray] = None,
-                         Q: Optional[object] = None, R: Optional[object] = "auto",
-                         hbar: float = 2.0, require_all_vehicles: bool = False) -> VRPInstance:
-    """Constrói VRPInstance a partir dos argumentos usados por solver.py (N=C, M=V)."""
-    D = np.asarray(D, dtype=np.float64)
-    if D.shape != (N + 1, N + 1):
-        raise ValueError(f"D deve ser ({N + 1}x{N + 1}) com o depósito no índice 0; recebido {D.shape}.")
-    if R == "auto":
-        R = auto_positions(N, M, demands, Q, require_all_vehicles)
-    return VRPInstance(D=D, M=M, R=R, demands=demands, Q=Q, hbar=hbar)
-
-
-def _instance_key(inst: VRPInstance) -> tuple:
-    return (inst.D.tobytes(), inst.M, inst.R, inst.hbar,
-            None if inst.demands is None else inst.demands.tobytes(),
-            None if inst.Q is None else np.asarray(inst.Q).tobytes())
-
-
-class ZakEvaluator:
-    """Avaliador com cache para um par (instância, cutoff).
-
-    A grade (x mod a, p mod b) não depende do estado: as funções de Hermite e
-    as energias de cada componente em todos os pontos da grade são calculadas
-    uma única vez. Cada chamada do VQE custa apenas a transformada de Zak do
-    ket e produtos escalares Σ P·E.
-    """
-
-    COMPONENTS = ("dist", "col", "gap", "vehicle", "capacity", "disc")
-
-    def __init__(self, inst: VRPInstance, cutoff: int, G: int = 8, n_cells: Optional[int] = None):
-        self.inst = inst
-        self.cutoff = int(cutoff)
-        self.Nc, self.G, x = _zak_grid(inst, self.cutoff, G, n_cells)
-        self.points_per_mode = self.Nc * self.G
-        total = self.points_per_mode ** inst.N
-        if total > get_max_grid_points():
-            raise MemoryError(
-                f"Grade de Zak com {total:,} pontos (N={inst.N}, {self.points_per_mode} por modo). "
-                "Reduza G/cutoff ou o número de cidades; o método exato é viável para N <= 4.")
-        self.hermite = hermite_functions(self.cutoff, x, inst.hbar)
-        self.shape = tuple(s for _ in range(inst.N) for s in (self.Nc, self.G))
-        self._unit: Optional[Dict[str, np.ndarray]] = None   # componentes sem peso
-        self._node_map = self._build_node_map()
-
-    # --- energias na grade (sem os pesos λ) ---------------------------
-    def _unit_components(self) -> Dict[str, np.ndarray]:
-        if self._unit is None:
-            unit = HamiltonianParams(lambda_dist=1, lambda_col=1, lambda_gap=1, lambda_vehicle=1,
-                                     lambda_cap=1 if self._has_capacity() else 0, lambda_disc=1)
-            acc = {c: np.empty(int(np.prod(self.shape)), dtype=np.float32) for c in self.COMPONENTS}
-            n = acc["dist"].size
-            chunk = 200_000
-            for s in range(0, n, chunk):
-                ids = np.arange(s, min(s + chunk, n))
-                th, ph = _points_from_index(np.unravel_index(ids, self.shape), self.Nc, self.G, self.inst.N)
-                vals = hamiltonian_energy(th, ph, self.inst, unit)
-                for c in self.COMPONENTS:
-                    acc[c][ids] = vals[c]
-            self._unit = acc
-        return self._unit
-
-    def _has_capacity(self) -> bool:
-        return self.inst.demands is not None and self.inst.Q is not None
-
-    # --- distribuição de Zak ------------------------------------------
-    def distribution(self, ket: np.ndarray) -> np.ndarray:
-        ket = np.asarray(ket)
-        if ket.shape != (self.cutoff,) * self.inst.N:
-            raise ValueError(f"ket com forma {ket.shape}; esperado {(self.cutoff,) * self.inst.N}.")
-        psi = ket.astype(np.complex128)
-        for _ in range(self.inst.N):
-            psi = np.tensordot(psi, self.hermite, axes=([0], [0]))
-        psi = psi.reshape(self.shape)
-        P = np.abs(np.fft.fftn(psi, axes=tuple(range(0, 2 * self.inst.N, 2)))) ** 2
-        return P / P.sum()
-
-    def mean_photons_per_mode(self, ket: np.ndarray) -> List[float]:
-        """⟨n̂_i⟩ de cada modo, a partir do ket.
-
-        Precisa do ket e não da distribuição de Zak: P é função só de
-        (x mod a, p mod b) e perde justamente o envelope que n̂ mede.
-        Normaliza pela norma do ket, de modo que o valor continue significando
-        o número médio de fótons do estado representável mesmo quando o corte
-        de Fock já descartou parte da amplitude.
-        """
-        ket = np.asarray(ket)
-        norm = float(np.sum(np.abs(ket) ** 2))
-        if norm <= 0.0:
-            return [0.0] * self.inst.N
-        levels = np.arange(ket.shape[0], dtype=np.float64)
-        out = []
-        for mode in range(ket.ndim):
-            marg = np.sum(np.abs(np.moveaxis(ket, mode, 0)) ** 2,
-                          axis=tuple(range(1, ket.ndim)))
-            out.append(float(np.dot(levels, marg) / norm))
+    def emb(op, mode):
+        mats = [np.eye(d, dtype=np.complex128)] * N
+        mats[mode] = op
+        out = mats[0]
+        for m in mats[1:]:
+            out = np.kron(out, m)
         return out
 
-    def energy(self, P: np.ndarray, params: HamiltonianParams,
-               ket: Optional[np.ndarray] = None) -> Dict[str, float]:
-        """Componentes ponderadas, com o confinamento quando ket é fornecido.
+    Ae = {(i, v, r): emb(ops.A[v, r], i)
+          for i in range(N) for v in range(M) for r in range(R)}
+    occ = {(v, r): sum(Ae[i, v, r] for i in range(N))
+           for v in range(M) for r in range(R)}
+    D = inst.D
 
-        Chaves devolvidas:
-          dist, col, gap, vehicle, capacity, disc  componentes modulares
-          encoding   soma das acima — é Ĥ_enc, comparável com as linhas de
-                     base de vácuo e uniforme e com o ótimo clássico C*
-          exc        λ_exc Σ_i ⟨n̂_i⟩ (0 se λ_exc = 0 ou ket ausente)
-          mean_photons  Σ_i ⟨n̂_i⟩ sem peso, para diagnóstico
-          total      encoding + exc — é o que o VQE minimiza
+    Hd = np.zeros((dim, dim), dtype=np.complex128)
+    for v in range(M):
+        for i in range(N):
+            Hd += D[0, i + 1] * Ae[i, v, 0]
+        for r in range(R - 1):
+            for i in range(N):
+                for j in range(N):
+                    if i != j:
+                        Hd += D[i + 1, j + 1] * (Ae[i, v, r] @ Ae[j, v, r + 1])
+            B = I - occ[v, r + 1]
+            for i in range(N):
+                Hd += D[i + 1, 0] * 0.5 * (Ae[i, v, r] @ B + B @ Ae[i, v, r])
+        for i in range(N):
+            Hd += D[i + 1, 0] * Ae[i, v, R - 1]
 
-        Com λ_exc = 0, total == encoding e o comportamento é idêntico ao
-        anterior.
-        """
-        unit = self._unit_components()
-        w = {"dist": params.lambda_dist, "col": params.lambda_col, "gap": params.lambda_gap,
-             "vehicle": params.lambda_vehicle, "capacity": params.lambda_cap, "disc": params.lambda_disc}
-        if params.lambda_cap > 0 and not self._has_capacity():
-            raise ValueError("λ_cap > 0 exige demands e Q.")
-        Pf = P.reshape(-1)
-        out = {c: float(w[c] * np.dot(Pf, unit[c].astype(np.float64, copy=False))) if w[c] != 0 else 0.0 for c in self.COMPONENTS}
-        encoding = float(sum(out.values()))
+    Hc = sum(Ae[i, v, r] @ Ae[j, v, r] for v in range(M) for r in range(R)
+             for i in range(N) for j in range(i + 1, N))
+    Hc = Hc if isinstance(Hc, np.ndarray) else np.zeros((dim, dim), dtype=np.complex128)
 
-        photons = 0.0
-        if ket is not None:
-            photons = float(sum(self.mean_photons_per_mode(ket)))
-        out["encoding"] = encoding
-        out["mean_photons"] = photons
-        out["exc"] = float(params.lambda_exc) * photons
-        out["total"] = encoding + out["exc"]
-        return out
+    Hg = np.zeros((dim, dim), dtype=np.complex128)
+    for v in range(M):
+        for r in range(1, R):
+            B = float(r) * I - sum(occ[v, q] for q in range(r))
+            for i in range(N):
+                Hg += B @ Ae[i, v, r] @ B
 
-    # --- agregação por slot (v, r) e amostragem ------------------------
-    def _build_node_map(self) -> np.ndarray:
-        """Matriz (Nc·G) x (M·R): ponto da grade -> slot mais próximo (s = v·R + r)."""
-        k = np.repeat(np.arange(self.Nc), self.G)
-        g = np.tile(np.arange(self.G), self.Nc)
-        r = np.mod(np.rint(g * self.inst.R / self.G).astype(int), self.inst.R)
-        v = np.mod(np.rint(k * self.inst.M / self.Nc).astype(int), self.inst.M)
-        S = self.inst.M * self.inst.R
-        onehot = np.zeros((self.points_per_mode, S))
-        onehot[np.arange(self.points_per_mode), v * self.inst.R + r] = 1.0
-        return onehot
+    Hv = np.zeros((dim, dim), dtype=np.complex128)
+    if req_all:
+        for v in range(M):
+            y = occ[v, 0] - I
+            Hv += y @ y
 
-    def slot_distribution(self, P: np.ndarray) -> np.ndarray:
-        """Probabilidade de cada configuração discreta, forma (M·R,)*N."""
-        T = P.reshape((self.points_per_mode,) * self.inst.N)
-        for _ in range(self.inst.N):
-            T = np.tensordot(T, self._node_map, axes=([0], [0]))
-        return T
+    Hcap = np.zeros((dim, dim), dtype=np.complex128)
+    if params.lambda_cap > 0:
+        for v in range(M):
+            Lv = sum(float(inst.demands[i]) * emb(ops.P_vehicle[v], i) for i in range(N))
+            w, Vv = np.linalg.eigh(_hermitian(Lv))
+            Hcap += (Vv * np.maximum(w.real - float(inst.Q[v]), 0.0) ** 2) @ Vv.conj().T
 
+    Hdisc = sum(emb(ops.H_disc, i) for i in range(N))
+    Hexc = sum(emb(ops.n_op, i) for i in range(N))
 
-def get_max_grid_points() -> int:
-    return _MAX_GRID_POINTS
+    H = (params.lambda_dist * Hd + params.lambda_col * Hc + params.lambda_gap * Hg
+         + params.lambda_vehicle * Hv + params.lambda_cap * Hcap
+         + params.lambda_disc * Hdisc + params.lambda_exc * Hexc)
+    return _hermitian(H)
 
 
-def set_max_grid_points(n: int) -> None:
-    """Limite de pontos da grade de Zak (memória ~ 80 bytes por ponto no pico)."""
-    global _MAX_GRID_POINTS
-    _MAX_GRID_POINTS = int(n)
+def ground_state(inst: VRPInstance, ops: ModularOperators,
+                 params: Optional[HamiltonianParams] = None,
+                 require_all_vehicles: Optional[bool] = None,
+                 k: int = 1, max_dim: int = 30_000) -> Dict[str, object]:
+    """Diagonaliza H e decodifica o fundamental pelo POVM.
 
-
-def zak_grid_points(inst: VRPInstance, cutoff: int, G: int = 8) -> int:
-    """Número de pontos da grade de Zak usada por evaluate_sf_state."""
-    Nc, Gx, _ = _zak_grid(inst, int(cutoff), G, None)
-    return (Nc * Gx) ** inst.N
-
-
-def _get_evaluator(inst: VRPInstance, cutoff: int, G: int, n_cells: Optional[int]) -> ZakEvaluator:
-    key = (_instance_key(inst), int(cutoff), int(G), n_cells)
-    ev = _EVALUATOR_CACHE.get(key)
-    if ev is None:
-        ev = ZakEvaluator(inst, cutoff, G, n_cells)
-        _EVALUATOR_CACHE[key] = ev
-    return ev
-
-
-def clear_cache() -> None:
-    """Libera as grades de energia em cache."""
-    _EVALUATOR_CACHE.clear()
-
-
-def _resolve_instance(N, M, D, demands, Q, inst, positions, require_all: bool = False) -> VRPInstance:
-    if isinstance(N, VRPInstance):          # chamada nova: evaluate_sf_state(state, inst, ...)
-        return N
-    if inst is not None:
-        return inst
-    if N is None or M is None or D is None:
-        raise ValueError("Informe N, M e D (ou uma VRPInstance).")
-    return instance_from_legacy(int(N), int(M), D, demands, Q, R=positions,
-                                require_all_vehicles=require_all)
-
-
-def _ket_of(state) -> np.ndarray:
-    if hasattr(state, "is_pure") and not state.is_pure:
-        raise NotImplementedError("Somente estados puros: o backend Fock sem ruído gera estados puros.")
-    ket = state.ket()
-    if ket is None:
-        raise NotImplementedError("state.ket() retornou None (estado misto).")
-    return np.asarray(ket)
-
-
-def evaluate_sf_state(
-    state,
-    N: Optional[object] = None,
-    M: Optional[int] = None,
-    D: Optional[np.ndarray] = None,
-    demands: Optional[np.ndarray] = None,
-    Q: Optional[object] = None,
-    cutoff: int = 8,
-    params: Optional[HamiltonianParams] = None,
-    *,
-    inst: Optional[VRPInstance] = None,
-    positions: object = "auto",
-    G: int = 8,
-    n_cells: Optional[int] = None,
-) -> Dict[str, float]:
-    """⟨Ĥ⟩ exato (na grade de Zak) de um estado do Strawberry Fields.
-
-    Assinatura compatível com solver.py:
-        evaluate_sf_state(state=..., M=V, N=C, D=D, demands=..., Q=..., cutoff=..., params=...)
-
-    Retorna {"total", "encoding", "exc", "mean_photons", "dist", "col", "gap",
-    "capacity", "vehicle", "disc"}. "encoding" é a parte modular Ĥ_enc, que é a
-    grandeza comparável com C* e com as linhas de base; "total" acrescenta o
-    confinamento λ_exc Σ⟨n̂⟩ e é o que o VQE minimiza. Com λ_exc = 0 os dois
-    coincidem.
-    Como P >= 0 e soma 1, o valor retornado nunca fica abaixo do menor valor
-    de F nos pontos da grade de Zak. Se `check_penalties(..., cutoff=cutoff)`
-    retornar ok=True, esse limite é o custo ótimo (GAP >= 0 no run.py).
+    max_dim é repassado a `dense_hamiltonian`: acima dele a montagem da matriz
+    densa é recusada com MemoryError, porque cutoff^N ao quadrado é o que
+    realmente pesa (em cutoff^N = 32768 a matriz já passa de 17 GB). Para
+    instâncias maiores é preciso um caminho esparso, com eigsh sobre um
+    LinearOperator em vez da matriz montada.
     """
-    params = params or HamiltonianParams()
-    instance = _resolve_instance(N, M, D, demands, Q, inst, positions, requires_all_vehicles(params))
-    ket = _ket_of(state)
-    ev = _get_evaluator(instance, ket.shape[0], G, n_cells)
-    return ev.energy(ev.distribution(ket), params, ket=ket)
-
-
-def extract_routes(
-    state,
-    N: Optional[object] = None,
-    M: Optional[int] = None,
-    D: Optional[np.ndarray] = None,
-    demands: Optional[np.ndarray] = None,
-    Q: Optional[object] = None,
-    cutoff: int = 8,
-    params: Optional[HamiltonianParams] = None,
-    *,
-    inst: Optional[VRPInstance] = None,
-    positions: object = "auto",
-    mode: str = "best_sample",
-    shots: int = 1000,
-    seed: Optional[int] = 42,
-    require_all_vehicles: Optional[bool] = None,
-    G: int = 8,
-    n_cells: Optional[int] = None,
-    return_details: bool = False,
-):
-    """Decodifica rotas no formato esperado por solver.py e run.py.
-
-    Formato: V == 1 -> [0, c1, ..., 0];  V > 1 -> {1: [0, ..., 0], 2: [0, ..., 0], ...}
-
-    mode = "best_sample"   : sorteia `shots` configurações da distribuição de slots
-                              e devolve a viável de menor custo (como no Madani).
-    mode = "most_probable" : configuração discreta de maior probabilidade.
-    Se nenhuma amostra for viável, usa a mais provável.
-    require_all_vehicles=None segue a regra do pacote (lambda_vehicle > 0).
-    """
-    params = params or HamiltonianParams()
-    require_all_vehicles = requires_all_vehicles(params, require_all_vehicles)
-    instance = _resolve_instance(N, M, D, demands, Q, inst, positions,
-                                 requires_all_vehicles(params))
-    ket = _ket_of(state)
-    ev = _get_evaluator(instance, ket.shape[0], G, n_cells)
-    S = instance.M * instance.R
-    probs = ev.slot_distribution(ev.distribution(ket)).reshape(-1)
-    probs = np.clip(probs, 0, None)
-    probs /= probs.sum()
-    use_cap = params.lambda_cap > 0 and instance.demands is not None and instance.Q is not None
-
-    def dec(flat_idx: int) -> Dict[str, object]:
-        s = np.array(np.unravel_index(flat_idx, (S,) * instance.N))
-        r, v = s % instance.R, s // instance.R
-        return decode(2 * np.pi * r / instance.R, 2 * np.pi * v / instance.M, instance)
-
-    chosen, cost, feasible = None, math.inf, False
-    if mode == "best_sample":
-        rng = np.random.default_rng(seed)
-        for idx in np.unique(rng.choice(probs.size, size=shots, p=probs)):
-            d = dec(int(idx))
-            if is_feasible(d, instance, require_all_vehicles, use_cap):
-                c = routes_cost(d["routes"], instance.D)
-                if c < cost:
-                    chosen, cost, feasible = d, c, True
-    elif mode != "most_probable":
-        raise ValueError("mode deve ser 'best_sample' ou 'most_probable'.")
-    if chosen is None:
-        chosen = dec(int(np.argmax(probs)))
-        feasible = is_feasible(chosen, instance, require_all_vehicles, use_cap)
-        cost = routes_cost(chosen["routes"], instance.D)
-
-    routes = chosen["routes"]
-    formatted = ([0, *routes[0], 0] if instance.M == 1
-                 else {v + 1: [0, *routes[v], 0] for v in range(instance.M)})
-    if return_details:
-        return formatted, {"cost": cost, "feasible": feasible,
-                           "prob_most_probable": float(probs.max()), "positions": instance.R}
-    return formatted
-
-
-def check_penalties(
-    N: object,
-    M: Optional[int] = None,
-    D: Optional[np.ndarray] = None,
-    demands: Optional[np.ndarray] = None,
-    Q: Optional[object] = None,
-    params: Optional[HamiltonianParams] = None,
-    *,
-    positions: object = "auto",
-    require_all_vehicles: Optional[bool] = None,
-    continuous_starts: int = 0,
-    cutoff: Optional[int] = None,
-    G: int = 8,
-    max_grid: int = 2_000_000,
-) -> Dict[str, object]:
-    """Confere se min(Ĥ) na grade é igual ao ótimo viável da própria codificação.
-
-    Compare "best_feasible_cost" com o custo do BruteForce: se coincidirem e
-    "ok" for True, a energia mínima do Hamiltoniano é o custo ótimo.
-    Com continuous_starts > 0 também procura mínimos fracionários no toro.
-    Com cutoff informado, confere o menor valor de F na grade de Zak usada por
-    evaluate_sf_state: é o limite inferior exato da energia reportada ao VQE.
-
-    Valida Ĥ_enc, não Ĥ_enc + λ_exc Σ⟨n̂⟩: o confinamento age sobre o envelope,
-    que a grade (θ, φ) não parametriza. Logo este teste — e a verificação da
-    codificação — independem de λ_exc, como deve ser. O limite inferior
-    reportado continua valendo para a chave "encoding" de evaluate_sf_state.
-    """
-    params = params or HamiltonianParams()
-    require_all_vehicles = requires_all_vehicles(params, require_all_vehicles)
-    instance = _resolve_instance(N, M, D, demands, Q, None, positions,
-                                 requires_all_vehicles(params))
-    size = (instance.M * instance.R) ** instance.N
-    if size > max_grid:
-        raise MemoryError(f"(M·R)^N = {size:,} configurações; aumente max_grid ou reduza a instância.")
-    th, ph = _grid_angles(instance)
-    E = hamiltonian_energy(th, ph, instance, params)["total"]
-    use_cap = params.lambda_cap > 0 and instance.demands is not None and instance.Q is not None
-    best_feasible = math.inf
-    for k in np.argsort(E, kind="stable"):
-        if E[k] > best_feasible + 1e-9:
-            break
-        d = decode(th[k], ph[k], instance)
-        if is_feasible(d, instance, require_all_vehicles, use_cap):
-            best_feasible = min(best_feasible, routes_cost(d["routes"], instance.D))
-    out = {"positions": instance.R, "require_all_vehicles": require_all_vehicles,
-           "grid_min_energy": float(E.min()),
-           "best_feasible_cost": best_feasible,
-           "lambda_exc": float(params.lambda_exc),
-           "validates": "H_enc",   # o confinamento não é testado aqui: ver nota
-           "ok": bool(np.isclose(E.min(), best_feasible))}
-    if continuous_starts > 0:
-        cm = continuous_minimum(instance, params, n_starts=continuous_starts)
-        out["continuous_min_energy"] = cm["min_energy"]
-        out["ok"] = out["ok"] and cm["min_energy"] >= best_feasible - 1e-6
-    if cutoff is not None:
-        ev = _get_evaluator(instance, int(cutoff), G, None)
-        unit = ev._unit_components()
-        w = {"dist": params.lambda_dist, "col": params.lambda_col, "gap": params.lambda_gap,
-             "vehicle": params.lambda_vehicle, "capacity": params.lambda_cap if use_cap else 0.0,
-             "disc": params.lambda_disc}
-        zmin = float(min(sum(w[c] * unit[c] for c in w if w[c] != 0)))
-        out["zak_grid_min_energy"] = zmin
-        out["ok"] = out["ok"] and zmin >= best_feasible - 1e-6
-    return out
+    H = dense_hamiltonian(inst, ops, params, require_all_vehicles,
+                          max_dim=max_dim)
+    w, V = np.linalg.eigh(H)
+    psi = V[:, 0].reshape((ops.cutoff,) * inst.N)
+    dist = assignment_distribution(psi, inst, ops)
+    best = decode_distribution(dist, inst, top=1)[0]
+    return {"eigenvalues": w[:max(k, 1)].real, "energy": float(w[0].real),
+            "psi": psi, "distribution": dist, "map": best,
+            "gap": float(w[1].real - w[0].real) if w.size > 1 else float("nan")}

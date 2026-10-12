@@ -147,8 +147,6 @@ A expansão algébrica de $H_{\text{capacity}}$ gera termos em potências dos op
 
 * **Termos de Grau $4$:** Os componentes quárticos $\hat{x}_i^4$ provenientes de $\left( L_v(\hat{x}) - Q_v \right)^4$ são codificados via portas não-Gaussianas **Kerr** ($K(\kappa) = e^{i \kappa \hat{n}^2} \propto e^{i \kappa \hat{x}^4}$) ou aproximações por comutadores encadeados.
 
-
-
 ---
 
 **5. Manutenção dos Termos de Consistência de Rota**
