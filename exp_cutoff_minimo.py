@@ -258,15 +258,16 @@ def _tr(C, V, d, kind, ok, ok_cfg, ok_route, cost, cstar, energy, dE, gap,
 def sweep_case(C, V, cutoffs, max_dim, max_configs, dense_limit=700,
                table=False, penalties="sugerida", lambda_exc=0.0,
                criterion="valid", confirm=2, lift_min=2.0, verbose=True,
-               trace=None):
+               trace=None, seed=42):
     trace = trace if trace is not None else []
-    inst = build_instance(C, V)
+    inst = build_instance(C, V, seed)
     cstar, optset = classical_optima(inst, V > 1)
     par = make_params(inst, V, penalties, lambda_exc)
     MR = inst.M * inst.R
     n_cfg = MR ** C
 
-    row = {"C": C, "V": V, "R": inst.R, "MR": MR, "n_configs": n_cfg,
+    row = {"C": C, "V": V, "seed": seed, "R": inst.R, "MR": MR,
+           "n_configs": n_cfg,
            "c_star": cstar, "n_optimal": len(optset),
            "penalties": penalties, "lambda_exc": lambda_exc,
            "criterion": criterion, "lift_min": lift_min,
@@ -453,6 +454,7 @@ def main(cities=(3, 4, 5),
          criterion="valid",      # "valid" | "lift" | "route" | "config"
          confirm=2,
          lift_min=2.0,           # limiar: P(ótima|válida) >= lift_min * acaso
+         seed=42,                # semente da instância (distâncias aleatórias)
          out="cutoff_minimo.csv",
          trace_out="cutoff_minimo_trace.csv"):
 
@@ -464,7 +466,7 @@ def main(cities=(3, 4, 5),
             print(f"\n=== C={C} V={V} ===")
             r = sweep_case(C, V, list(cutoffs), max_dim, max_configs,
                            dense_limit, table, penalties, lambda_exc,
-                           criterion, confirm, lift_min, True, trace)
+                           criterion, confirm, lift_min, True, trace, seed)
             if r["skipped"]:
                 print(f"      parou: {r['skipped']}")
             rows.append(r)

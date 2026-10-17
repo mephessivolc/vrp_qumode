@@ -13,6 +13,12 @@ O relativo fica mais fácil quanto maior o espaço de busca, porque o acaso
 (chance_valid) encolhe: 4,5x o acaso em C=5 V=1 ainda é só ~7% de acerto. Para
 comparar C diferentes use o absoluto. Reporte d_min sempre com o limiar.
 
+  ganho     s<f>  (P - acaso) / (1 - acaso) >= f                (ex.: s0.5  s0.8)
+                  Vai de 0 (acaso) a 1 (certeza). Não tem o teto do relativo:
+                  com acaso = 1/3 o limiar "3x acaso" exige P = 1 e é
+                  inatingível, o que aparece como "> 20" sem significado.
+                  Para comparar C diferentes, é o mais justo dos três.
+
 Para cada (C, V) e cada limiar procura o menor d tal que o critério vale nesse
 d e em todos os cutoffs testados depois, com pelo menos `confirm` depois (e a
 melhor rota válida é ótima, se need_top=True). Sem isso imprime "> lb": o maior
@@ -39,7 +45,8 @@ from collections import defaultdict
 NAN = float("nan")
 
 DEFAULT_SPECS = (("ratio", 2.0), ("ratio", 3.0),
-                 ("cond", 0.3), ("cond", 0.5), ("cond", 0.8))
+                 ("cond", 0.3), ("cond", 0.5), ("cond", 0.8),
+                 ("skill", 0.5), ("skill", 0.8))
 
 
 def _f(x):
@@ -60,8 +67,10 @@ def load(path):
             ch = _f(r["chance_valid"])
             cond = po / pv if pv > 0 else NAN
             ratio = cond / ch if ch > 0 else NAN
+            skill = (cond - ch) / (1.0 - ch) if 0 <= ch < 1 else NAN
             series[(int(r["C"]), int(r["V"]))].append(dict(
-                d=int(r["d"]), pv=pv, cond=cond, ratio=ratio, chance=ch,
+                d=int(r["d"]), pv=pv, cond=cond, ratio=ratio, skill=skill,
+                chance=ch,
                 top=int(_f(r.get("top_valid_ok", 0)) or 0),
                 col=_f(r.get("col_medio"))))
     for k in series:
@@ -83,7 +92,11 @@ def stable_d(series, metric, thr, need_top=True, confirm=2):
 
 def label(spec):
     kind, v = spec
-    return f"{v:g}x acaso" if kind == "ratio" else f"P(ótima|válida) >= {v:g}"
+    if kind == "ratio":
+        return f"{v:g}x acaso"
+    if kind == "skill":
+        return f"ganho normalizado >= {v:g}"
+    return f"P(ótima|válida) >= {v:g}"
 
 
 def parse_specs(tokens):
@@ -91,6 +104,8 @@ def parse_specs(tokens):
     for t in tokens:
         if t.startswith("a"):
             specs.append(("cond", float(t[1:])))
+        elif t.startswith("s"):
+            specs.append(("skill", float(t[1:])))
         else:
             specs.append(("ratio", float(t)))
     return tuple(specs)
@@ -115,6 +130,8 @@ def main(path="cutoff_minimo_trace.csv", specs=DEFAULT_SPECS, need_top=True,
             f"{s['d']}:{s['cond']:.3f}" for s in ser))
         print("  razão ao acaso por d : " + "  ".join(
             f"{s['d']}:{s['ratio']:.2f}" for s in ser))
+        print("  ganho normalizado/d  : " + "  ".join(
+            f"{s['d']}:{s['skill']:.2f}" for s in ser))
         for spec in specs:
             d, lb, s = stable_d(ser, spec[0], spec[1], need_top, confirm)
             name = f"{label(spec):<26}"

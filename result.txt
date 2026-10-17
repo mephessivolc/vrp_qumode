@@ -1,0 +1,75 @@
+========================================================================================================
+d_min por limiar (confirmado nos cutoffs seguintes)
+========================================================================================================
+
+C=3 V=1  MR=3  acaso P(ótima|válida)=0.3333
+  P(ótima|válida) por d: 2:0.370  3:0.416  4:0.543  5:0.693  6:0.503  7:0.549  8:0.623  9:0.929  10:0.611  11:0.917  12:0.958  14:0.968  16:0.978  20:0.978
+  razão ao acaso por d : 2:1.11  3:1.25  4:1.63  5:2.08  6:1.51  7:1.65  8:1.87  9:2.79  10:1.83  11:2.75  12:2.88  14:2.90  16:2.93  20:2.93
+  2x acaso                   d_min=11  d/MR= 3.67   P(val)=0.480  P(ótima)=0.4406  col=0.58
+  3x acaso                   d_min >20  d/MR >6.67   (censurado)
+  P(ótima|válida) >= 0.3     d_min=4   d/MR= 1.33   P(val)=0.299  P(ótima)=0.1626  col=0.82
+  P(ótima|válida) >= 0.5     d_min=4   d/MR= 1.33   P(val)=0.299  P(ótima)=0.1626  col=0.82
+  P(ótima|válida) >= 0.8     d_min=11  d/MR= 3.67   P(val)=0.480  P(ótima)=0.4406  col=0.58
+
+C=3 V=2  MR=4  acaso P(ótima|válida)=0.3333
+  P(ótima|válida) por d: 2:0.397  3:0.390  4:0.451  5:0.339  6:0.340  7:0.404  8:0.579  9:0.848  10:0.828  11:0.816  12:0.805  14:0.881  16:0.851  20:0.897
+  razão ao acaso por d : 2:1.19  3:1.17  4:1.35  5:1.02  6:1.02  7:1.21  8:1.74  9:2.54  10:2.48  11:2.45  12:2.42  14:2.64  16:2.55  20:2.69
+  2x acaso                   d_min=9   d/MR= 2.25   P(val)=0.496  P(ótima)=0.4201  col=0.44
+  3x acaso                   d_min >20  d/MR >5.00   (censurado)
+  P(ótima|válida) >= 0.3     d_min=8   d/MR= 2.00   P(val)=0.426  P(ótima)=0.2468  col=0.46
+  P(ótima|válida) >= 0.5     d_min=8   d/MR= 2.00   P(val)=0.426  P(ótima)=0.2468  col=0.46
+  P(ótima|válida) >= 0.8     d_min=9   d/MR= 2.25   P(val)=0.496  P(ótima)=0.4201  col=0.44
+
+C=4 V=1  MR=4  acaso P(ótima|válida)=0.0833
+  P(ótima|válida) por d: 2:0.111  3:0.078  4:0.101  5:0.059  6:0.121  7:0.146  8:0.146  9:0.259  10:0.249  11:0.477  12:0.222  14:0.587  16:0.892
+  razão ao acaso por d : 2:1.33  3:0.93  4:1.21  5:0.71  6:1.45  7:1.75  8:1.75  9:3.11  10:2.99  11:5.72  12:2.66  14:7.04  16:10.70
+  2x acaso                   d_min=9   d/MR= 2.25   P(val)=0.193  P(ótima)=0.0500  col=1.08
+  3x acaso                   d_min >12  d/MR >3.00   (censurado)
+  P(ótima|válida) >= 0.3     d_min >12  d/MR >3.00   (censurado)
+  P(ótima|válida) >= 0.5     d_min >12  d/MR >3.00   (censurado)
+  P(ótima|válida) >= 0.8     d_min >14  d/MR >3.50   (censurado)
+
+C=4 V=2  MR=6  acaso P(ótima|válida)=0.0556
+  P(ótima|válida) por d: 2:0.044  3:0.067  4:0.056  5:0.079  6:0.035  7:0.039  8:0.039  9:0.017  10:0.025  11:0.016  12:0.015  14:0.001  16:0.001
+  razão ao acaso por d : 2:0.80  3:1.21  4:1.01  5:1.41  6:0.63  7:0.70  8:0.71  9:0.31  10:0.45  11:0.29  12:0.26  14:0.02  16:0.01
+  2x acaso                   d_min >16  d/MR >2.67   (censurado)
+  3x acaso                   d_min >16  d/MR >2.67   (censurado)
+  P(ótima|válida) >= 0.3     d_min >16  d/MR >2.67   (censurado)
+  P(ótima|válida) >= 0.5     d_min >16  d/MR >2.67   (censurado)
+  P(ótima|válida) >= 0.8     d_min >16  d/MR >2.67   (censurado)
+
+C=4 V=3  MR=6  acaso P(ótima|válida)=0.1667
+  P(ótima|válida) por d: 2:0.167  3:0.173  4:0.155  5:0.282  6:0.306  7:0.249  8:0.282  9:0.341  10:0.345  11:0.362  12:0.356  14:0.393  16:0.649
+  razão ao acaso por d : 2:1.00  3:1.04  4:0.93  5:1.69  6:1.84  7:1.49  8:1.69  9:2.05  10:2.07  11:2.17  12:2.14  14:2.36  16:3.89
+  2x acaso                   d_min=9   d/MR= 1.50   P(val)=0.213  P(ótima)=0.0727  col=0.74
+  3x acaso                   d_min >14  d/MR >2.33   (censurado)
+  P(ótima|válida) >= 0.3     d_min=9   d/MR= 1.50   P(val)=0.213  P(ótima)=0.0727  col=0.74
+  P(ótima|válida) >= 0.5     d_min >14  d/MR >2.33   (censurado)
+  P(ótima|válida) >= 0.8     d_min >16  d/MR >2.67   (censurado)
+
+C=5 V=1  MR=5  acaso P(ótima|válida)=0.0167
+  P(ótima|válida) por d: 2:0.032  3:0.043  4:0.035  5:0.029  6:0.073  7:0.076  8:0.077  9:0.078  10:0.081
+  razão ao acaso por d : 2:1.94  3:2.56  4:2.09  5:1.74  6:4.39  7:4.56  8:4.60  9:4.68  10:4.84
+  2x acaso                   d_min=6   d/MR= 1.20   P(val)=0.076  P(ótima)=0.0056  col=1.55
+  3x acaso                   d_min=6   d/MR= 1.20   P(val)=0.076  P(ótima)=0.0056  col=1.55
+  P(ótima|válida) >= 0.3     d_min >10  d/MR >2.00   (censurado)
+  P(ótima|válida) >= 0.5     d_min >10  d/MR >2.00   (censurado)
+  P(ótima|válida) >= 0.8     d_min >10  d/MR >2.00   (censurado)
+
+C=5 V=2  MR=8  acaso P(ótima|válida)=0.0083
+  P(ótima|válida) por d: 2:0.005  3:0.005  4:0.007  5:0.004  6:0.003  7:0.005  8:0.004  9:0.004  10:0.009
+  razão ao acaso por d : 2:0.60  3:0.57  4:0.83  5:0.45  6:0.37  7:0.60  8:0.50  9:0.49  10:1.09
+  2x acaso                   d_min >10  d/MR >1.25   (censurado)
+  3x acaso                   d_min >10  d/MR >1.25   (censurado)
+  P(ótima|válida) >= 0.3     d_min >10  d/MR >1.25   (censurado)
+  P(ótima|válida) >= 0.5     d_min >10  d/MR >1.25   (censurado)
+  P(ótima|válida) >= 0.8     d_min >10  d/MR >1.25   (censurado)
+
+C=5 V=3  MR=9  acaso P(ótima|válida)=0.0333
+  P(ótima|válida) por d: 2:0.025  3:0.024  4:0.031  5:0.024  6:0.032  7:0.017  8:0.025  9:0.009  10:0.009
+  razão ao acaso por d : 2:0.76  3:0.73  4:0.94  5:0.72  6:0.97  7:0.51  8:0.76  9:0.26  10:0.28
+  2x acaso                   d_min >10  d/MR >1.11   (censurado)
+  3x acaso                   d_min >10  d/MR >1.11   (censurado)
+  P(ótima|válida) >= 0.3     d_min >10  d/MR >1.11   (censurado)
+  P(ótima|válida) >= 0.5     d_min >10  d/MR >1.11   (censurado)
+  P(ótima|válida) >= 0.8     d_min >10  d/MR >1.11   (censurado)
