@@ -88,8 +88,8 @@ def make_params(inst, V, pen, lam_exc):
 
 def run(C=4, V=1, cutoffs=(5, 6, 8, 10), penalties=("base", "sugerida"),
         lam_excs=(0.0, 0.005), dense_limit=700, max_dim=60_000,
-        out="diag_gs.csv"):
-    inst = build_instance(C, V)
+        out="diag_gs.csv", seed=42):
+    inst = build_instance(C, V, seed)
     cstar, optset = classical_optima(inst, V > 1)
     print(f"C={C} V={V}  R={inst.R}  C*={cstar}  rotas ótimas={len(optset)}")
     for pen in penalties:

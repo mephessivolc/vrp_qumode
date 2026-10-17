@@ -39,6 +39,7 @@ Uso
     python exp_dmin_limiar.py cutoff_minimo_trace.csv 2 3 a0.3 a0.5
 """
 import csv
+import os
 import sys
 from collections import defaultdict
 
@@ -114,9 +115,13 @@ def parse_specs(tokens):
 def main(path="cutoff_minimo_trace.csv", specs=DEFAULT_SPECS, need_top=True,
          confirm=2):
     series = load(path)
-    with open("result.txt", "w") as f:
+    base = os.path.splitext(os.path.basename(path))[0]
+    out_path = f"result_{base}.txt"
+    with open(out_path, "w", encoding="utf-8") as f:
         if not series:
-            print("Nenhuma linha com p_valid no trace: rode a v3 de exp_cutoff_minimo.py.", file=f)
+            msg = "Nenhuma linha com p_valid no trace: rode a v3 de exp_cutoff_minimo.py."
+            print(msg, file=f)
+            print(msg)
             return
         print("=" * 104, file=f)
         print("d_min por limiar (confirmado nos cutoffs seguintes)", file=f)
@@ -144,6 +149,7 @@ def main(path="cutoff_minimo_trace.csv", specs=DEFAULT_SPECS, need_top=True,
                     print(f"  {name} d_min >{lb:<3} d/MR >{lb / MR:4.2f}   (censurado)", file=f)
                 else:
                     print(f"  {name} sem cutoffs suficientes para confirmar", file=f)
+    print(f"saída gravada em {out_path}")
 
 
 if __name__ == "__main__":
