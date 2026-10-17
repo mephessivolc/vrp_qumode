@@ -459,7 +459,7 @@ def main(cities=(3, 4, 5),
     rows, trace = [], []
     for C in cities:
         for V in vehicles:
-            if V > C:
+            if V >= C:      # V=C é degenerado: uma única rota válida (chance=1)
                 continue
             print(f"\n=== C={C} V={V} ===")
             r = sweep_case(C, V, list(cutoffs), max_dim, max_configs,

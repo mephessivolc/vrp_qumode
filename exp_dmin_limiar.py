@@ -4,35 +4,42 @@ exp_dmin_limiar.py — d_min em função do critério, lido do trace da v3.
 Não roda simulação: só lê cutoff_minimo_trace.csv (gerado por
 exp_cutoff_minimo.py v3, com as colunas p_valid, p_opt_valid, chance_valid).
 
-Para cada (C, V) e cada limiar k, procura o menor d tal que
-    P(ótima | válida) / chance_valid >= k     (e a melhor rota válida é ótima,
-                                               se need_top=True)
-vale nesse d e em todos os cutoffs testados depois, com pelo menos `confirm`
-cutoffs depois. Se não houver, imprime ">lb": o maior d que falhou (cota
-inferior, não medida).
+Dois tipos de limiar sobre P(ótima | válida) = p_opt_valid / p_valid
+-------------------------------------------------------------------
+  relativo  k     P(ótima|válida) / chance_valid >= k       (ex.: 2  3)
+  absoluto  a<t>  P(ótima|válida) >= t                      (ex.: a0.3  a0.5)
 
-Por que existe: d_min NÃO é um limiar nítido. A massa ótima cresce de forma
-contínua com d, então o valor de d_min depende de k. Reporte d_min sempre com o
-k usado e mostre a sensibilidade (esta tabela).
+O relativo fica mais fácil quanto maior o espaço de busca, porque o acaso
+(chance_valid) encolhe: 4,5x o acaso em C=5 V=1 ainda é só ~7% de acerto. Para
+comparar C diferentes use o absoluto. Reporte d_min sempre com o limiar.
+
+Para cada (C, V) e cada limiar procura o menor d tal que o critério vale nesse
+d e em todos os cutoffs testados depois, com pelo menos `confirm` depois (e a
+melhor rota válida é ótima, se need_top=True). Sem isso imprime "> lb": o maior
+d que falhou (cota inferior, não medida).
 
 Colunas
 -------
-  razão por d   P(ótima|válida) / chance_valid (1 = acaso)
-  P(val)        probabilidade de a configuração ser válida no d_min (custo de
-                descartar disparos inválidos)
-  d/MR          MR = V * R, com R = C se V=1 e C-V+1 se V>1 (instâncias do
-                experimento: demandas 1, capacidade C).
+  d/MR          MR = V * R, R = C se V=1 e C-V+1 se V>1 (instâncias do
+                experimento: demandas 1, capacidade C)
+  P(val)        probabilidade de a configuração ser válida no d_min (o resto
+                dos disparos é descartado)
+  P(ótima)      P(val) * P(ótima|válida): chance de um disparo bruto dar a rota
+                ótima
 
 Uso
 ---
-    python exp_dmin_limiar.py                          # cutoff_minimo_trace.csv
-    python exp_dmin_limiar.py trace.csv 1.5 2 3 5
+    python exp_dmin_limiar.py                               # limiares padrão
+    python exp_dmin_limiar.py cutoff_minimo_trace.csv 2 3 a0.3 a0.5
 """
 import csv
 import sys
 from collections import defaultdict
 
 NAN = float("nan")
+
+DEFAULT_SPECS = (("ratio", 2.0), ("ratio", 3.0),
+                 ("cond", 0.3), ("cond", 0.5), ("cond", 0.8))
 
 
 def _f(x):
@@ -54,7 +61,7 @@ def load(path):
             cond = po / pv if pv > 0 else NAN
             ratio = cond / ch if ch > 0 else NAN
             series[(int(r["C"]), int(r["V"]))].append(dict(
-                d=int(r["d"]), pv=pv, ratio=ratio, chance=ch,
+                d=int(r["d"]), pv=pv, cond=cond, ratio=ratio, chance=ch,
                 top=int(_f(r.get("top_valid_ok", 0)) or 0),
                 col=_f(r.get("col_medio"))))
     for k in series:
@@ -62,8 +69,8 @@ def load(path):
     return series
 
 
-def stable_d(series, k, need_top=True, confirm=2):
-    flags = [(s["d"], bool(s["ratio"] >= k and (s["top"] == 1 or not need_top)),
+def stable_d(series, metric, thr, need_top=True, confirm=2):
+    flags = [(s["d"], bool(s[metric] >= thr and (s["top"] == 1 or not need_top)),
               s) for s in series]
     fails = [d for d, ok, _ in flags if not ok]
     lb = max(fails) if fails else None
@@ -74,35 +81,56 @@ def stable_d(series, k, need_top=True, confirm=2):
     return None, lb, None
 
 
-def main(path="cutoff_minimo_trace.csv", ks=(1.5, 2.0, 3.0, 5.0),
-         need_top=True, confirm=2):
+def label(spec):
+    kind, v = spec
+    return f"{v:g}x acaso" if kind == "ratio" else f"P(ótima|válida) >= {v:g}"
+
+
+def parse_specs(tokens):
+    specs = []
+    for t in tokens:
+        if t.startswith("a"):
+            specs.append(("cond", float(t[1:])))
+        else:
+            specs.append(("ratio", float(t)))
+    return tuple(specs)
+
+
+def main(path="cutoff_minimo_trace.csv", specs=DEFAULT_SPECS, need_top=True,
+         confirm=2):
     series = load(path)
     if not series:
         print("Nenhuma linha com p_valid no trace: rode a v3 de exp_cutoff_minimo.py.")
         return
-    print("=" * 100)
-    print("d_min por limiar k:  P(ótima|válida) >= k * acaso  (confirmado nos cutoffs seguintes)")
-    print("=" * 100)
+    print("=" * 104)
+    print("d_min por limiar (confirmado nos cutoffs seguintes)")
+    print("=" * 104)
     for (C, V), ser in sorted(series.items()):
+        if V >= C:
+            continue
         R = C if V == 1 else C - V + 1
         MR = V * R
-        chance = ser[0]["chance"]
-        print(f"\nC={C} V={V}  MR={MR}  acaso(P(ótima|válida))={chance:.4f}")
-        print("  razão por d: " + "  ".join(
+        print(f"\nC={C} V={V}  MR={MR}  acaso P(ótima|válida)={ser[0]['chance']:.4f}")
+        print("  P(ótima|válida) por d: " + "  ".join(
+            f"{s['d']}:{s['cond']:.3f}" for s in ser))
+        print("  razão ao acaso por d : " + "  ".join(
             f"{s['d']}:{s['ratio']:.2f}" for s in ser))
-        for k in ks:
-            d, lb, s = stable_d(ser, k, need_top, confirm)
+        for spec in specs:
+            d, lb, s = stable_d(ser, spec[0], spec[1], need_top, confirm)
+            name = f"{label(spec):<26}"
             if d is not None:
-                print(f"  k={k:<4} d_min={d:<3} d/MR={d / MR:5.2f}   "
-                      f"P(val)={s['pv']:.3f}   col={s['col']:.2f}")
+                print(f"  {name} d_min={d:<3} d/MR={d / MR:5.2f}   "
+                      f"P(val)={s['pv']:.3f}  P(ótima)={s['pv'] * s['cond']:.4f}  "
+                      f"col={s['col']:.2f}")
             elif lb is not None:
-                print(f"  k={k:<4} d_min >{lb:<3} d/MR >{lb / MR:4.2f}   (censurado)")
+                print(f"  {name} d_min >{lb:<3} d/MR >{lb / MR:4.2f}   (censurado)")
             else:
-                print(f"  k={k:<4} sem cutoffs suficientes para confirmar")
+                print(f"  {name} sem cutoffs suficientes para confirmar")
 
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    path = args[0] if args else "cutoff_minimo_trace.csv"
-    ks = tuple(float(x) for x in args[1:]) or (1.5, 2.0, 3.0, 5.0)
-    main(path, ks)
+    path = "cutoff_minimo_trace.csv"
+    if args and args[0].lower().endswith(".csv"):
+        path, args = args[0], args[1:]
+    main(path, parse_specs(args) or DEFAULT_SPECS)

@@ -110,7 +110,7 @@ def main(
     rows = []
     for C in cities:
         for V in vehicles:
-            if V > C:
+            if V >= C:      # V=C é degenerado: uma única rota válida
                 continue
             R = positions(C, V)
             MR = V * R
