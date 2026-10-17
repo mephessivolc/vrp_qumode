@@ -1,0 +1,3 @@
+C,V,seed,R,MR,n_configs,c_star,n_optimal,penalties,lambda_exc,criterion,lift_min,massa_unif,chance_valid,n_valid_routes,lambda_col,lambda_gap,lambda_vehicle,d_tab,d_gs,d_gs_stable,d_gs_lb,status_gs,n_tested,n_ok,rho_at_dgs,massa_at_dgs,gap_at_dgs,weyl_qtr_at_dgs,E0_at_dgs,map_p_at_dgs,method_at_dgs,seconds,skipped
+4,1,1,4,4,256,36.0,2,sugerida,0.0,valid,2.0,0.078125,0.08333333333333333,24,181.0,101.0,0.0,,5,,8,CENSURADO,4,3,12.271502233463014,0.0958711111989298,0.27508402547391597,0.17687182525238362,305.3124668282421,0.024386572856318026,dense,58.727489948272705,
+4,2,1,3,6,1296,59.0,2,sugerida,0.0,valid,2.0,0.037037037037037035,0.05555555555555555,36,201.0,121.0,121.0,,,,16,CENSURADO,4,0,,,,,,,,193.97980570793152,

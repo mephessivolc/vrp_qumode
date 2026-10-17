@@ -114,35 +114,36 @@ def parse_specs(tokens):
 def main(path="cutoff_minimo_trace.csv", specs=DEFAULT_SPECS, need_top=True,
          confirm=2):
     series = load(path)
-    if not series:
-        print("Nenhuma linha com p_valid no trace: rode a v3 de exp_cutoff_minimo.py.")
-        return
-    print("=" * 104)
-    print("d_min por limiar (confirmado nos cutoffs seguintes)")
-    print("=" * 104)
-    for (C, V), ser in sorted(series.items()):
-        if V >= C:
-            continue
-        R = C if V == 1 else C - V + 1
-        MR = V * R
-        print(f"\nC={C} V={V}  MR={MR}  acaso P(ótima|válida)={ser[0]['chance']:.4f}")
-        print("  P(ótima|válida) por d: " + "  ".join(
-            f"{s['d']}:{s['cond']:.3f}" for s in ser))
-        print("  razão ao acaso por d : " + "  ".join(
-            f"{s['d']}:{s['ratio']:.2f}" for s in ser))
-        print("  ganho normalizado/d  : " + "  ".join(
-            f"{s['d']}:{s['skill']:.2f}" for s in ser))
-        for spec in specs:
-            d, lb, s = stable_d(ser, spec[0], spec[1], need_top, confirm)
-            name = f"{label(spec):<26}"
-            if d is not None:
-                print(f"  {name} d_min={d:<3} d/MR={d / MR:5.2f}   "
-                      f"P(val)={s['pv']:.3f}  P(ótima)={s['pv'] * s['cond']:.4f}  "
-                      f"col={s['col']:.2f}")
-            elif lb is not None:
-                print(f"  {name} d_min >{lb:<3} d/MR >{lb / MR:4.2f}   (censurado)")
-            else:
-                print(f"  {name} sem cutoffs suficientes para confirmar")
+    with open("result.txt", "w") as f:
+        if not series:
+            print("Nenhuma linha com p_valid no trace: rode a v3 de exp_cutoff_minimo.py.", file=f)
+            return
+        print("=" * 104, file=f)
+        print("d_min por limiar (confirmado nos cutoffs seguintes)", file=f)
+        print("=" * 104, file=f)
+        for (C, V), ser in sorted(series.items()):
+            if V >= C:
+                continue
+            R = C if V == 1 else C - V + 1
+            MR = V * R
+            print(f"\nC={C} V={V}  MR={MR}  acaso P(ótima|válida)={ser[0]['chance']:.4f}", file=f)
+            print("  P(ótima|válida) por d: " + "  ".join(
+                f"{s['d']}:{s['cond']:.3f}" for s in ser), file=f)
+            print("  razão ao acaso por d : " + "  ".join(
+                f"{s['d']}:{s['ratio']:.2f}" for s in ser), file=f)
+            print("  ganho normalizado/d  : " + "  ".join(
+                f"{s['d']}:{s['skill']:.2f}" for s in ser), file=f)
+            for spec in specs:
+                d, lb, s = stable_d(ser, spec[0], spec[1], need_top, confirm)
+                name = f"{label(spec):<26}"
+                if d is not None:
+                    print(f"  {name} d_min={d:<3} d/MR={d / MR:5.2f}   "
+                        f"P(val)={s['pv']:.3f}  P(ótima)={s['pv'] * s['cond']:.4f}  "
+                        f"col={s['col']:.2f}", file=f)
+                elif lb is not None:
+                    print(f"  {name} d_min >{lb:<3} d/MR >{lb / MR:4.2f}   (censurado)", file=f)
+                else:
+                    print(f"  {name} sem cutoffs suficientes para confirmar", file=f)
 
 
 if __name__ == "__main__":

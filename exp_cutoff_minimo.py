@@ -428,7 +428,7 @@ def print_table(rows):
             ratio = f"{r['d_gs_stable'] / r['MR']:.2f}"
         elif r["d_gs_lb"] is not None:
             d_est = f">{r['d_gs_lb']}"
-            ratio = f">{r['d_gs_lb'] / r['MR']:.2f}"
+            ratio = f">{r['d_gs_lb'] / r['MR']:.2f}", file=f)
         else:
             d_est, ratio = "—", "—"
 
