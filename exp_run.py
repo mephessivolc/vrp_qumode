@@ -7,6 +7,9 @@ seus resultados em arquivo (nomes abaixo) e também mostra na tela.
 
 bloco                  arquivo(s) gerado(s)                          duração
 fatorado_verificacao   resultado_f_verificacao.txt                   segundos
+fatorado_decomposicao_exata  resultado_f_decomposicao.txt            segundos
+fatorado_distinta      resultado_f_distinta_overhead.txt,            segundos
+                       resultado_f_distinta_decisao.txt
 fatorado_campo_medio   resultado_f_campo_medio.txt                   segundos
 fatorado_overhead      resultado_f_overhead.txt                      segundos
 fatorado_decisao       resultado_f_decisao.txt                       segundos
@@ -30,7 +33,9 @@ quiser guardar. Os blocos já executados e analisados ficam desligados.
 EXECUTAR = {
     # caminho B: estados-produto sem tensor d^N
     "fatorado_verificacao": True,       # roda sempre antes dos outros blocos fatorados
-    "fatorado_campo_medio": True,       # NOVO: de onde vem o desvio do termo de lacuna
+    "fatorado_decomposicao_exata": True,  # NOVO: campo médio + auto-flutuação + ...
+    "fatorado_distinta": True,            # NOVO: variante 'distinta' do termo de lacuna
+    "fatorado_campo_medio": False,        # já analisado
     "fatorado_overhead": False,         # já analisado
     "fatorado_decisao": False,          # já analisado
     "fatorado_pecas": False,            # já analisado
@@ -49,7 +54,8 @@ def main():
     from exp_perfil_rotas import parte_a, parte_c, parte_d, saida
 
     # --- caminho B ----------------------------------------------------------
-    blocos_fatorados = ("fatorado_verificacao", "fatorado_campo_medio",
+    blocos_fatorados = ("fatorado_verificacao", "fatorado_decomposicao_exata",
+                        "fatorado_distinta", "fatorado_campo_medio",
                         "fatorado_overhead", "fatorado_decisao", "fatorado_pecas")
     if any(EXECUTAR[k] for k in blocos_fatorados):
         import exp_fatorado as F
@@ -59,6 +65,15 @@ def main():
         if not ok:
             print("\nA verificação FALHOU: os demais blocos fatorados foram pulados.")
         else:
+            if EXECUTAR["fatorado_decomposicao_exata"]:
+                with saida("resultado_f_decomposicao.txt"):
+                    F.decomposicao_exata_da_lacuna()
+            if EXECUTAR["fatorado_distinta"]:
+                formas_d = ("soma", "soma+distinta", "predecessor+distinta")
+                with saida("resultado_f_distinta_overhead.txt"):
+                    F.overhead_por_perfil(ds=(8, 16, 32, 64), formas=formas_d)
+                with saida("resultado_f_distinta_decisao.txt"):
+                    F.decisao_por_semente(formas=formas_d)
             if EXECUTAR["fatorado_campo_medio"]:
                 with saida("resultado_f_campo_medio.txt"):
                     F.campo_medio_por_perfil()

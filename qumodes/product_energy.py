@@ -113,9 +113,22 @@ class NodeTable:
         return Moments(self.a[s], self.b[s], self.t[s], self.hd[s], self.nph[s])
 
 
-def energy_from_moments(mom: Moments, inst, par) -> Dict[str, object]:
+def energy_from_moments(mom: Moments, inst, par,
+                        gap_variant: str = "padrao") -> Dict[str, object]:
     """Mesmas chaves de energy_components (dist, col, gap, vehicle, capacity,
-    disc, encoding, mean_photons, exc, total) mais 'gap_pieces' (6 peças)."""
+    disc, encoding, mean_photons, exc, total) mais 'gap_pieces' (6 peças).
+
+    gap_variant
+      "padrao"   sanduíche B n_r B, com B contando TODAS as cidades (atual)
+      "distinta" para a verificação da cidade i, B_i conta só as OUTRAS cidades:
+                 sum_i A_i^{(r)} (c - sum_{q in Q} sum_{j != i} A_j^{(q)})^2.
+                 Os fatores agem em modos diferentes e COMUTAM: não há
+                 ordenamento nem sanduíche. Mesmo conjunto de zeros e também PSD.
+                 Só existe aqui, para teste: NÃO está em energy_components.
+                 Em produto: <A_i> [ (c - s_-i)^2 + sum_{j != i} Var_j(S) ].
+    """
+    if gap_variant not in ("padrao", "distinta"):
+        raise ValueError(f"gap_variant inválido: {gap_variant!r}")
     if par.lambda_cap > 0:
         raise NotImplementedError("lambda_cap > 0 não é suportado por esta fatoração.")
     N, M, R = inst.N, inst.M, inst.R
@@ -161,6 +174,15 @@ def energy_from_moments(mom: Moments, inst, par) -> Dict[str, object]:
             s_menos = sj.sum() - sj                               # sum_{j != i} s_j
             var_outros = (m2.sum() - m2) - ((sj ** 2).sum() - sj ** 2)
             ru = u.real
+            if gap_variant == "distinta":
+                pieces += np.array([
+                    float((c * c * ai).sum()),                    # P1
+                    float((-2.0 * c * ai * s_menos).sum()),       # P2
+                    float((ai * s_menos ** 2).sum()),             # P3a
+                    float((ai * var_outros).sum()),               # P3b
+                    0.0, 0.0,                                     # P4, P5 não existem
+                ])
+                continue
             pieces += np.array([
                 float((c * c * ai).sum()),                        # P1
                 float((-2.0 * c * (ru + ai * s_menos)).sum()),    # P2

@@ -71,6 +71,23 @@ def _estado_aleatorio(rng, d):
     return v / np.linalg.norm(v)
 
 
+def _par_e_variante(inst, V, forma, lambda_exc=0.0):
+    """'soma', 'predecessor', 'soma+distinta' ou 'predecessor+distinta' ->
+    (params com a gap_form base, variante do avaliador)."""
+    base, _, var = forma.partition("+")
+    par = make_params(inst, V, "sugerida", lambda_exc, base)
+    return par, ("distinta" if var == "distinta" else "padrao")
+
+
+def _emb(op, i, C, d):
+    """Embute `op` (d x d) no modo i de C modos (ordem da primeira cidade = eixo 0)."""
+    out = None
+    for k in range(C):
+        m = op if k == i else np.eye(d)
+        out = m if out is None else np.kron(out, m)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 1. verificação contra energy_components
 # ---------------------------------------------------------------------------
@@ -111,6 +128,36 @@ def verificar(casos=((3, 1, 4), (3, 2, 4), (4, 2, 4), (4, 1, 4)),
                 print(f"C={C} V={V} d={d} R={inst.R} forma={forma:<11} "
                       f"estado={tipo:<9} erro_rel_max={pior:.2e}  "
                       f"{'OK' if ok else 'FALHOU'}")
+    print("\n--- variante 'distinta' contra operadores explícitos (kron) ---")
+    for (C, V, d) in ((3, 1, 3), (3, 2, 3), (4, 2, 3)):
+        for forma in formas:
+            inst = build_instance(C, V, 42)
+            par = make_params(inst, V, "sugerida", 0.0, forma)
+            ops = H.build_modular_operators(d, inst.M, inst.R, HBAR)
+            A, Hd, nop = PE.operator_stack(ops, inst.M, inst.R)
+            phis = [_estado_aleatorio(rng, d) for _ in range(C)]
+            psi = _produto(phis).reshape(-1)
+            R = inst.R
+            total = 0.0
+            for v in range(inst.M):
+                for r in range(1, R):
+                    c, qs = H.gap_operator_spec(par.gap_form, r)
+                    for i in range(C):
+                        Bi = c * np.eye(d ** C, dtype=np.complex128)
+                        for q in qs:
+                            for j in range(C):
+                                if j != i:
+                                    Bi = Bi - _emb(A[v * R + q], j, C, d)
+                        Hi = _emb(A[v * R + r], i, C, d) @ (Bi @ Bi)
+                        total += float(np.real(psi.conj() @ (Hi @ psi)))
+            mom = PE.moments_from_states(phis, A, Hd, nop)
+            got = float(PE.energy_from_moments(mom, inst, par, "distinta")["gap_pieces"].sum())
+            err = abs(total - got) / (1.0 + abs(total))
+            ok = err < tol
+            ok_all &= ok
+            print(f"C={C} V={V} d={d} R={R} forma={forma:<11} "
+                  f"erro_rel={err:.2e}  {'OK' if ok else 'FALHOU'}")
+
     print("\n" + ("AVALIADOR FATORADO OK" if ok_all
                   else "FALHOU — não use os resultados fatorados"))
     return ok_all
@@ -129,7 +176,7 @@ def overhead_por_perfil(C=4, V=2, ds=(8, 12, 16, 24, 32, 48, 64), seed=42,
         info.append((s, perfil(rotas), H.routes_cost(rotas, inst.D)))
     termos = ("dist-custo", "col", "gap", "vehicle", "disc", "total")
     for forma in formas:
-        par = make_params(inst, V, "sugerida", 0.0, forma)
+        par, var = _par_e_variante(inst, V, forma)
         print("\n" + "=" * 100)
         print(f"OVERHEAD POR PERFIL  C={C} V={V} semente={seed} gap_form={forma} "
               f"({len(configs)} configurações válidas; média por perfil)")
@@ -140,7 +187,7 @@ def overhead_por_perfil(C=4, V=2, ds=(8, 12, 16, 24, 32, 48, 64), seed=42,
             tab = PE.NodeTable(ops, inst.M, inst.R)
             acc = defaultdict(lambda: defaultdict(list))
             for (s, p, custo) in info:
-                e = PE.energy_from_moments(tab.take(s), inst, par)
+                e = PE.energy_from_moments(tab.take(s), inst, par, var)
                 acc[p]["dist-custo"].append(e["dist"] - custo)
                 for k in ("col", "gap", "vehicle", "disc"):
                     acc[p][k].append(e[k])
@@ -190,9 +237,9 @@ def decisao_por_semente(C=4, V=2, seeds=(42, 1, 2, 3, 4, 5),
         res = {}
         for s in seeds:
             inst, cstar, configs, custo, otim = preparado[s]
-            par = make_params(inst, V, "sugerida", 0.0, forma)
+            par, var = _par_e_variante(inst, V, forma)
             for d in ds:
-                E = np.array([PE.energy_from_moments(tabs[d].take(c), inst, par)["encoding"]
+                E = np.array([PE.energy_from_moments(tabs[d].take(c), inst, par, var)["encoding"]
                               for c in configs])
                 k = int(np.argmin(E))
                 dE = float(E[otim].min() - E.min())
@@ -223,7 +270,7 @@ def decisao_por_semente(C=4, V=2, seeds=(42, 1, 2, 3, 4, 5),
             print(f"{s:>8}" + "".join(f"{res[(s, d)][2]:>9.2f}" for d in ds))
 
         conhecido = GS_COST_D16.get((C, V), {})
-        if conhecido and 16 in ds:
+        if conhecido and 16 in ds and forma == "soma":
             print("\nconferência com o fundamental em d=16 (custo decodificado)")
             for s in seeds:
                 if s in conhecido:
@@ -247,7 +294,7 @@ def pecas_da_lacuna(C=4, V=2, ds=(8, 16, 32, 64), seed=42,
           "cidades   P4   P5 <SAS>")
     print("=" * 100)
     for forma in formas:
-        par = make_params(inst, V, "sugerida", 0.0, forma)
+        par, var = _par_e_variante(inst, V, forma)
         print(f"\ngap_form={forma}")
         print(f"{'d':>4}{'perfil':>10}" + "".join(f"{p:>11}" for p in PE.GAP_PIECES)
               + f"{'soma':>11}")
@@ -256,7 +303,7 @@ def pecas_da_lacuna(C=4, V=2, ds=(8, 16, 32, 64), seed=42,
             tab = PE.NodeTable(ops, inst.M, inst.R)
             acc = defaultdict(list)
             for s, p in zip(configs, perfis):
-                acc[p].append(PE.energy_from_moments(tab.take(s), inst, par)["gap_pieces"])
+                acc[p].append(PE.energy_from_moments(tab.take(s), inst, par, var)["gap_pieces"])
             medias = {p: np.mean(np.array(v), axis=0) for p, v in acc.items()}
             for p in sorted(medias):
                 print(f"{d:>4}{str(p):>10}" + "".join(f"{x:>11.3f}" for x in medias[p])
@@ -326,3 +373,89 @@ def campo_medio_por_perfil(C=4, V=2, ds=(8, 16, 32, 64), seed=42,
                 m = np.mean(np.array(acc[(p, r)]), axis=0)
                 print(f"{str(p):>10}{r:>3}{len(acc[(p, r)]):>5}{m[0]:>11.4f}"
                       f"{m[1]:>11.4f}{m[2]:>9.4f}{m[3]:>8.4f}{m[4]:>12.5f}")
+
+
+# ---------------------------------------------------------------------------
+# 6. decomposição EXATA do termo de lacuna por verificação
+# ---------------------------------------------------------------------------
+def decomposicao_exata_da_lacuna(C=4, V=2, ds=(8, 16, 32, 64), seed=42,
+                                 formas=("soma", "predecessor")):
+    """O campo médio a_i*Bbar^2 (ver campo_medio_por_perfil) é só PARTE do termo
+    de lacuna. A identidade exata, em estado-produto, para a verificação da
+    cidade i em (v, r), com S_j = sum_{q in Q} A_j^{(q)}:
+
+        <B A_i B> = MF + AUTO + OUTRAS + CRUZADO
+          MF      = a_i (c - sum_j s_j)^2                    campo médio
+          AUTO    = w_i - a_i s_i^2        (>= 0 se phi_i é autovetor de A_r)
+                    flutuação de S_i NO PRÓPRIO modo i, ponderada por A_r
+          OUTRAS  = a_i sum_{j != i} Var_j(S)                (a peça P3b)
+          CRUZADO = -2 (c - s_-i) (Re u_i - a_i s_i)         (= 0 para estados de nó)
+    com s_j = <S_j>, u_i = <S_i A_i>, w_i = <S_i A_i S_i>.
+
+    Imprime, por perfil e posição r, as MÉDIAS POR VERIFICAÇÃO de cada parcela
+    e o total por configuração (soma das verificações). 'resíduo' = exato menos
+    (MF + AUTO + OUTRAS + CRUZADO): deve ser ~1e-15; se não for, a identidade
+    está errada.
+    """
+    inst = build_instance(C, V, seed)
+    R = inst.R
+    configs = configs_validas(inst, V)
+    perfis = [perfil(routes_from_slots(c, inst)) for c in configs]
+    nomes = ("MF", "AUTO", "OUTRAS", "CRUZADO", "exato", "resíduo")
+    for d in ds:
+        ops = H.build_modular_operators(d, inst.M, inst.R, HBAR)
+        tab = PE.NodeTable(ops, inst.M, inst.R)
+        for forma in formas:
+            print("\n" + "=" * 100)
+            print(f"DECOMPOSIÇÃO EXATA DA LACUNA  C={C} V={V} semente={seed} d={d} "
+                  f"gap_form={forma}  (sem peso lambda_gap)")
+            print("=" * 100)
+            print(f"{'perfil':>10}{'r':>3}{'n':>5}" + "".join(f"{x:>12}" for x in nomes))
+            por_check = defaultdict(list)
+            por_config = defaultdict(list)
+            for s, p in zip(configs, perfis):
+                a = tab.a[list(s)]
+                b = tab.b[list(s)]
+                t = tab.t[list(s)]
+                total_cfg = np.zeros(6)
+                for i, x in enumerate(s):
+                    v, r = divmod(x, R)
+                    if r < 1:
+                        continue
+                    c, qs = H.gap_operator_spec(forma, r)
+                    xq = [v * R + q for q in qs]
+                    ai = a[i, x]
+                    sj = a[:, xq].sum(axis=1)
+                    m2 = b[:, xq][:, :, xq].sum(axis=(1, 2)).real
+                    u = b[i, xq, x].sum()
+                    w = t[i, xq, x, :][:, xq].sum().real
+                    s_i = sj[i]
+                    s_menos = sj.sum() - s_i
+                    stot = sj.sum()
+                    mf = ai * (c - stot) ** 2
+                    auto = w - ai * s_i ** 2
+                    outras = ai * sum(m2[j] - sj[j] ** 2 for j in range(len(s)) if j != i)
+                    cruz = -2.0 * (c - s_menos) * (u.real - ai * s_i)
+                    exato = (c * c * ai - 2.0 * c * (u.real + ai * s_menos)
+                             + ai * (s_menos ** 2 - sum(sj[j] ** 2 for j in range(len(s)) if j != i)
+                                     + sum(m2[j] for j in range(len(s)) if j != i))
+                             + 2.0 * s_menos * u.real + w)
+                    linha = np.array([mf, auto, outras, cruz, exato,
+                                      exato - (mf + auto + outras + cruz)])
+                    por_check[(p, r)].append(linha)
+                    total_cfg += linha
+                por_config[p].append(total_cfg)
+            for (p, r) in sorted(por_check):
+                m = np.mean(np.array(por_check[(p, r)]), axis=0)
+                print(f"{str(p):>10}{r:>3}{len(por_check[(p, r)]):>5}"
+                      + "".join(f"{x:>12.5f}" for x in m))
+            print("  total por configuração (soma das verificações):")
+            medias = {p: np.mean(np.array(v), axis=0) for p, v in por_config.items()}
+            for p in sorted(medias):
+                print(f"{str(p):>10}{'':>3}{len(por_config[p]):>5}"
+                      + "".join(f"{x:>12.5f}" for x in medias[p]))
+            ps = sorted(medias)
+            if len(ps) > 1:
+                dif = medias[ps[0]] - medias[ps[-1]]
+                print(f"{'diferença':>18}" + "".join(f"{x:>12.5f}" for x in dif)
+                      + f"   ({ps[0]} menos {ps[-1]})")
