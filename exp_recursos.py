@@ -79,7 +79,12 @@ def load_dmin(path):
     with fh:
         for row in csv.DictReader(fh):
             key = (int(row["C"]), int(row["V"]))
-            if _num(row.get("d_gs")):
+            if "d_gs_stable" in row:          # CSV v2: só vale o d confirmado
+                if _num(row["d_gs_stable"]):
+                    out[key] = ("med", int(float(row["d_gs_stable"])))
+                elif _num(row.get("d_gs_lb")):
+                    out[key] = ("lb", int(float(row["d_gs_lb"])))
+            elif _num(row.get("d_gs")):       # CSV v1
                 out[key] = ("med", int(float(row["d_gs"])))
             elif _num(row.get("d_gs_lb")):
                 out[key] = ("lb", int(float(row["d_gs_lb"])))
