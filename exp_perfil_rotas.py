@@ -46,6 +46,17 @@ Uso
     python exp_perfil_rotas.py            # só a parte A
     python exp_perfil_rotas.py 8          # A e B com d=8
     python exp_perfil_rotas.py 8 12       # A e B com d=8 e d=12
+    python exp_perfil_rotas.py c 8 12 16  # só a parte C (amostra, termo a termo)
+
+Parte C: por amostra de configurações válidas de cada perfil, calcula as
+contribuições col, gap, veh e disc e a diferença entre perfis para cada termo,
+em vários d. Mostra QUAL termo cria o viés e se ele encolhe com d.
+
+Arquivos gravados (na pasta de execução; sobrescrevem os anteriores):
+    parte A      -> resultado_a.txt
+    parte B      -> resultado_b.txt
+    parte C      -> resultado_c.txt
+A saída continua aparecendo na tela, então não precisa redirecionar.
 """
 import os
 
@@ -53,6 +64,7 @@ for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
            "NUMEXPR_NUM_THREADS"):
     os.environ.setdefault(_k, "1")
 
+import contextlib
 import itertools
 import sys
 from collections import defaultdict
@@ -150,8 +162,98 @@ def parte_b(C=4, V=2, d=8, seed=42, max_configs=300_000):
               "  (compare com a diferença de custo entre rotas, 2 a 14)")
 
 
+def parte_c(C=4, V=2, ds=(8, 12, 16), n_amostra=8, seed=42, rng_seed=0):
+    """Overhead por perfil, TERMO A TERMO, numa amostra de configurações
+    válidas (não percorre as (M*R)^N configurações: leva segundos a poucos
+    minutos mesmo em d=16). Responde: (1) qual termo cria a diferença entre
+    perfis; (2) como a diferença muda com d."""
+    inst = build_instance(C, V, seed)
+    par = make_params(inst, V, "sugerida", 0.0)
+    rng = np.random.default_rng(rng_seed)
+    por_perfil = defaultdict(list)
+    for slots in itertools.product(range(inst.M * inst.R), repeat=C):
+        if _is_valid(slots, inst, V > 1):
+            por_perfil[perfil(routes_from_slots(slots, inst))].append(slots)
+    termos = ("dist-custo", "col", "gap", "vehicle", "disc", "total")
+    for d in ds:
+        ops = H.build_modular_operators(d, inst.M, inst.R, HBAR)
+        kets = {(v, r): H.node_state(ops, v, r)
+                for v in range(inst.M) for r in range(inst.R)}
+        print("\n" + "=" * 96)
+        print(f"PARTE C  C={C} V={V} d={d}: overhead por termo e perfil "
+              f"(média de até {n_amostra} configurações válidas)")
+        print("=" * 96)
+        print(f"{'perfil':>12}{'n':>4}" + "".join(f"{t:>12}" for t in termos))
+        medias = {}
+        for p, lista in sorted(por_perfil.items()):
+            idx = rng.choice(len(lista), size=min(n_amostra, len(lista)),
+                             replace=False)
+            acc = defaultdict(list)
+            for i in idx:
+                slots = lista[int(i)]
+                psi = None
+                for s in slots:
+                    v, r = divmod(s, inst.R)
+                    psi = (kets[(v, r)] if psi is None
+                           else np.multiply.outer(psi, kets[(v, r)]))
+                e = H.energy_components(psi, inst, ops, par)
+                custo = H.routes_cost(routes_from_slots(slots, inst), inst.D)
+                acc["dist-custo"].append(float(e["dist"]) - custo)
+                for k in ("col", "gap", "vehicle", "disc"):
+                    acc[k].append(float(e[k]))
+                acc["total"].append(float(e["encoding"]) - custo)
+            medias[p] = {k: float(np.mean(v)) for k, v in acc.items()}
+            print(f"{str(p):>12}{len(idx):>4}"
+                  + "".join(f"{medias[p][t]:>12.2f}" for t in termos))
+        if len(medias) > 1:
+            ps = sorted(medias)
+            print(f"{'diferença':>16}" + "".join(
+                f"{medias[ps[0]][t] - medias[ps[-1]][t]:>12.2f}" for t in termos)
+                + f"   ({ps[0]} menos {ps[-1]})")
+
+
+class _Tee:
+    """Escreve na tela e no arquivo ao mesmo tempo (o arquivo é esvaziado a
+    cada escrita, então enche durante a execução mesmo se ela for interrompida)."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, texto):
+        for st in self.streams:
+            st.write(texto)
+            st.flush()
+
+    def flush(self):
+        for st in self.streams:
+            st.flush()
+
+
+@contextlib.contextmanager
+def saida(nome):
+    """Tudo o que for impresso dentro do bloco vai para a tela E para `nome`
+    (UTF-8, na pasta de execução; sobrescreve o arquivo anterior)."""
+    with open(nome, "w", encoding="utf-8") as fh:
+        antigo = sys.stdout
+        sys.stdout = _Tee(antigo, fh)
+        try:
+            yield
+        finally:
+            sys.stdout = antigo
+    print(f"saída gravada em {nome}")
+
+
 if __name__ == "__main__":
-    parte_a(4, 2)
-    parte_a(4, 1)
-    for arg in sys.argv[1:]:
-        parte_b(4, 2, d=int(arg))
+    args = sys.argv[1:]
+    if args and args[0].lower() == "c":
+        ds = tuple(int(x) for x in args[1:]) or (8, 12, 16)
+        with saida("resultado_c.txt"):
+            parte_c(4, 2, ds=ds)
+    else:
+        with saida("resultado_a.txt"):
+            parte_a(4, 2)
+            parte_a(4, 1)
+        if args:
+            with saida("resultado_b.txt"):
+                for arg in args:
+                    parte_b(4, 2, d=int(arg))
