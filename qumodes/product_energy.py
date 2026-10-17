@@ -161,6 +161,7 @@ def energy_from_moments(mom: Moments, inst, par,
 
     # --- lacuna: <B n_r B>, B = c I - sum_Q n_q --------------------------------
     pieces = np.zeros(6)
+    por_vr = {}                      # contribuição do termo de lacuna por (v, r)
     for v in range(M):
         for r in range(1, R):
             c, qs = H.gap_operator_spec(par.gap_form, r)
@@ -175,15 +176,17 @@ def energy_from_moments(mom: Moments, inst, par,
             var_outros = (m2.sum() - m2) - ((sj ** 2).sum() - sj ** 2)
             ru = u.real
             if gap_variant == "distinta":
-                pieces += np.array([
+                pv = np.array([
                     float((c * c * ai).sum()),                    # P1
                     float((-2.0 * c * ai * s_menos).sum()),       # P2
                     float((ai * s_menos ** 2).sum()),             # P3a
                     float((ai * var_outros).sum()),               # P3b
                     0.0, 0.0,                                     # P4, P5 não existem
                 ])
+                pieces += pv
+                por_vr[(v, r)] = float(pv.sum())
                 continue
-            pieces += np.array([
+            pv = np.array([
                 float((c * c * ai).sum()),                        # P1
                 float((-2.0 * c * (ru + ai * s_menos)).sum()),    # P2
                 float((ai * s_menos ** 2).sum()),                 # P3a
@@ -191,6 +194,8 @@ def energy_from_moments(mom: Moments, inst, par,
                 float((2.0 * s_menos * ru).sum()),                # P4
                 float(w.sum()),                                   # P5
             ])
+            pieces += pv
+            por_vr[(v, r)] = float(pv.sum())
     h_gap = float(pieces.sum())
 
     # --- veículos obrigatórios ----------------------------------------------------
@@ -219,4 +224,5 @@ def energy_from_moments(mom: Moments, inst, par,
     out["exc"] = par.lambda_exc * photons
     out["total"] = encoding + out["exc"]
     out["gap_pieces"] = pieces
+    out["gap_por_vr"] = por_vr          # {(v, r): contribuição sem peso lambda_gap}
     return out

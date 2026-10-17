@@ -7,6 +7,8 @@ seus resultados em arquivo (nomes abaixo) e também mostra na tela.
 
 bloco                  arquivo(s) gerado(s)                          duração
 fatorado_verificacao   resultado_f_verificacao.txt                   segundos
+fatorado_fantasma      resultado_f_fantasma.txt                      segundos
+fatorado_validacao     resultado_f_validacao.txt                     minutos
 fatorado_decomposicao_exata  resultado_f_decomposicao.txt            segundos
 fatorado_distinta      resultado_f_distinta_overhead.txt,            segundos
                        resultado_f_distinta_decisao.txt
@@ -33,8 +35,10 @@ quiser guardar. Os blocos já executados e analisados ficam desligados.
 EXECUTAR = {
     # caminho B: estados-produto sem tensor d^N
     "fatorado_verificacao": True,       # roda sempre antes dos outros blocos fatorados
-    "fatorado_decomposicao_exata": True,  # NOVO: campo médio + auto-flutuação + ...
-    "fatorado_distinta": True,            # NOVO: variante 'distinta' do termo de lacuna
+    "fatorado_fantasma": True,            # NOVO: lacuna por tipo de verificação
+    "fatorado_validacao": True,           # NOVO: sementes novas, V=1 e C=5 (substituto)
+    "fatorado_decomposicao_exata": False, # já analisado
+    "fatorado_distinta": False,           # já analisado
     "fatorado_campo_medio": False,        # já analisado
     "fatorado_overhead": False,         # já analisado
     "fatorado_decisao": False,          # já analisado
@@ -54,7 +58,8 @@ def main():
     from exp_perfil_rotas import parte_a, parte_c, parte_d, saida
 
     # --- caminho B ----------------------------------------------------------
-    blocos_fatorados = ("fatorado_verificacao", "fatorado_decomposicao_exata",
+    blocos_fatorados = ("fatorado_verificacao", "fatorado_fantasma",
+                        "fatorado_validacao", "fatorado_decomposicao_exata",
                         "fatorado_distinta", "fatorado_campo_medio",
                         "fatorado_overhead", "fatorado_decisao", "fatorado_pecas")
     if any(EXECUTAR[k] for k in blocos_fatorados):
@@ -65,6 +70,23 @@ def main():
         if not ok:
             print("\nA verificação FALHOU: os demais blocos fatorados foram pulados.")
         else:
+            if EXECUTAR["fatorado_fantasma"]:
+                with saida("resultado_f_fantasma.txt"):
+                    F.decomposicao_fantasma()
+            if EXECUTAR["fatorado_validacao"]:
+                formas_v = ("soma", "predecessor+distinta")
+                with saida("resultado_f_validacao.txt"):
+                    # V=2, sementes NOVAS (6 a 15): o diagnóstico usou 42 e 1 a 5
+                    F.decisao_por_semente(C=4, V=2, seeds=tuple(range(6, 16)),
+                                          formas=formas_v)
+                    # V=1: a variante não pode piorar o caso que funciona
+                    F.decisao_por_semente(C=4, V=1, seeds=(42, 1, 2, 3, 4, 5),
+                                          formas=formas_v)
+                    # C=5, V=2 e V=3: o fundamental só foi testado até d=10
+                    F.decisao_por_semente(C=5, V=2, seeds=(42, 1, 2, 3, 4),
+                                          ds=(8, 16, 32, 64), formas=formas_v)
+                    F.decisao_por_semente(C=5, V=3, seeds=(42, 1, 2, 3, 4),
+                                          ds=(8, 16, 32, 64), formas=formas_v)
             if EXECUTAR["fatorado_decomposicao_exata"]:
                 with saida("resultado_f_decomposicao.txt"):
                     F.decomposicao_exata_da_lacuna()

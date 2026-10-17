@@ -459,3 +459,68 @@ def decomposicao_exata_da_lacuna(C=4, V=2, ds=(8, 16, 32, 64), seed=42,
                 dif = medias[ps[0]] - medias[ps[-1]]
                 print(f"{'diferença':>18}" + "".join(f"{x:>12.5f}" for x in dif)
                       + f"   ({ps[0]} menos {ps[-1]})")
+
+
+# ---------------------------------------------------------------------------
+# 7. o termo de lacuna por TIPO de verificação: onde está o overhead?
+# ---------------------------------------------------------------------------
+def decomposicao_fantasma(C=4, V=2, ds=(8, 16, 32, 64), seed=42,
+                          formas=("soma", "predecessor", "predecessor+distinta")):
+    """Separa o termo de lacuna pela posição (v, r) verificada, SOMANDO sobre
+    todas as cidades (inclui o vazamento de cidades que estão em outros nós):
+
+      ocupado          há uma cidade no nó (v, r)
+      fantasma-ok      nó vazio e todo Q ocupado  (B ~ 0: quase não penaliza)
+      fantasma-lacuna  nó vazio e algum Q vazio   (B ~ c: penaliza o vazamento)
+
+    A decomposição por verificação NO PRÓPRIO NÓ (decomposicao_exata_da_lacuna)
+    só vê a categoria 'ocupado' e fica muito abaixo do termo total. Aqui a soma
+    das três categorias reproduz o termo de lacuna total.
+    Valores em energia (já multiplicados por lambda_gap); entre parênteses, o
+    número médio de verificações da categoria por configuração.
+    """
+    inst = build_instance(C, V, seed)
+    R = inst.R
+    configs = configs_validas(inst, V)
+    perfis = [perfil(routes_from_slots(c, inst)) for c in configs]
+    cats = ("ocupado", "fantasma-ok", "fantasma-lacuna")
+    for d in ds:
+        ops = H.build_modular_operators(d, inst.M, inst.R, HBAR)
+        tab = PE.NodeTable(ops, inst.M, inst.R)
+        for forma in formas:
+            par, var = _par_e_variante(inst, V, forma)
+            lam = par.lambda_gap
+            print("\n" + "=" * 100)
+            print(f"TERMO DE LACUNA POR TIPO DE VERIFICAÇÃO  C={C} V={V} "
+                  f"semente={seed} d={d} gap_form={forma}  (energia; #verificações)")
+            print("=" * 100)
+            print(f"{'perfil':>10}{'n':>5}" + "".join(f"{c:>22}" for c in cats)
+                  + f"{'total':>10}")
+            por_perfil = defaultdict(list)
+            for s, p in zip(configs, perfis):
+                gv = PE.energy_from_moments(tab.take(s), inst, par, var)["gap_por_vr"]
+                ocup = set(s)
+                en = dict.fromkeys(cats, 0.0)
+                cont = dict.fromkeys(cats, 0)
+                for (v, r), val in gv.items():
+                    _, qs = H.gap_operator_spec(par.gap_form, r)
+                    if v * R + r in ocup:
+                        cat = "ocupado"
+                    elif all(v * R + q in ocup for q in qs):
+                        cat = "fantasma-ok"
+                    else:
+                        cat = "fantasma-lacuna"
+                    en[cat] += lam * val
+                    cont[cat] += 1
+                por_perfil[p].append([en[c] for c in cats] + [cont[c] for c in cats])
+            medias = {p: np.mean(np.array(v), axis=0) for p, v in por_perfil.items()}
+            for p in sorted(medias):
+                m = medias[p]
+                print(f"{str(p):>10}{len(por_perfil[p]):>5}"
+                      + "".join(f"{m[k]:>14.2f} ({m[3 + k]:>4.1f})" for k in range(3))
+                      + f"{m[:3].sum():>10.2f}")
+            ps = sorted(medias)
+            if len(ps) > 1:
+                dif = medias[ps[0]][:3] - medias[ps[-1]][:3]
+                print(f"{'diferença':>15}" + "".join(f"{x:>14.2f}{'':>8}" for x in dif)
+                      + f"{dif.sum():>10.2f}   ({ps[0]} menos {ps[-1]})")
