@@ -7,6 +7,7 @@ seus resultados em arquivo (nomes abaixo) e também mostra na tela.
 
 bloco                  arquivo(s) gerado(s)                          duração
 fatorado_verificacao   resultado_f_verificacao.txt                   segundos
+fatorado_campo_medio   resultado_f_campo_medio.txt                   segundos
 fatorado_overhead      resultado_f_overhead.txt                      segundos
 fatorado_decisao       resultado_f_decisao.txt                       segundos
 fatorado_pecas         resultado_f_pecas_lacuna.txt                  segundos
@@ -28,10 +29,11 @@ quiser guardar. Os blocos já executados e analisados ficam desligados.
 
 EXECUTAR = {
     # caminho B: estados-produto sem tensor d^N
-    "fatorado_verificacao": True,
-    "fatorado_overhead": True,
-    "fatorado_decisao": True,
-    "fatorado_pecas": True,
+    "fatorado_verificacao": True,       # roda sempre antes dos outros blocos fatorados
+    "fatorado_campo_medio": True,       # NOVO: de onde vem o desvio do termo de lacuna
+    "fatorado_overhead": False,         # já analisado
+    "fatorado_decisao": False,          # já analisado
+    "fatorado_pecas": False,            # já analisado
     # já executados e analisados
     "d_fidelidade_dos_nos": False,
     "a_perfis": False,
@@ -47,8 +49,8 @@ def main():
     from exp_perfil_rotas import parte_a, parte_c, parte_d, saida
 
     # --- caminho B ----------------------------------------------------------
-    blocos_fatorados = ("fatorado_verificacao", "fatorado_overhead",
-                        "fatorado_decisao", "fatorado_pecas")
+    blocos_fatorados = ("fatorado_verificacao", "fatorado_campo_medio",
+                        "fatorado_overhead", "fatorado_decisao", "fatorado_pecas")
     if any(EXECUTAR[k] for k in blocos_fatorados):
         import exp_fatorado as F
 
@@ -57,6 +59,9 @@ def main():
         if not ok:
             print("\nA verificação FALHOU: os demais blocos fatorados foram pulados.")
         else:
+            if EXECUTAR["fatorado_campo_medio"]:
+                with saida("resultado_f_campo_medio.txt"):
+                    F.campo_medio_por_perfil()
             if EXECUTAR["fatorado_overhead"]:
                 with saida("resultado_f_overhead.txt"):
                     F.overhead_por_perfil()

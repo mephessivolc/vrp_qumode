@@ -15,6 +15,11 @@ decisao_por_semente    rota que minimiza a energia de estado-produto, por
                        semente e d: prevê o fundamental? em que d vira o ótimo?
 pecas_da_lacuna        decompõe o termo de lacuna em 6 peças e mostra qual peça
                        cria a diferença entre perfis (candidata a mecanismo).
+campo_medio_por_perfil o termo de lacuna em estados-produto é quase todo de campo
+                       médio: por verificação, a_i * Bbar^2 com
+                       Bbar = c - sum <n_q>. Separa <n_q> em parte PRÓPRIA (nó
+                       do predecessor) e VAZAMENTO (outras cidades), e mostra a
+                       matriz de sobreposição entre nós.
 
 Limites
 -------
@@ -261,3 +266,63 @@ def pecas_da_lacuna(C=4, V=2, ds=(8, 16, 32, 64), seed=42,
                 dif = medias[ps[0]] - medias[ps[-1]]
                 print(f"{'':>4}{'diferença':>10}" + "".join(f"{x:>11.3f}" for x in dif)
                       + f"{dif.sum():>11.3f}   ({ps[0]} menos {ps[-1]})")
+
+
+# ---------------------------------------------------------------------------
+# 5. campo médio por verificação
+# ---------------------------------------------------------------------------
+def campo_medio_por_perfil(C=4, V=2, ds=(8, 16, 32, 64), seed=42,
+                           formas=("soma", "predecessor")):
+    """Em estados-produto o termo de lacuna é quase todo de CAMPO MÉDIO: por
+    verificação (cidade i em r >= 1), a_i * Bbar^2 com
+
+        Bbar = c - sum_{q in Q} <n_q>,    <n_q> = sum_j a_j[nó (v, q)].
+
+    (a peça de flutuação P3b é ~0, ver pecas_da_lacuna.) <n_q> se separa em
+        próprio    a da cidade que ocupa o nó (v, q): infidelidade do nó, 1 - F
+        vazamento  soma das OUTRAS cidades no nó (v, q): sobreposição entre nós
+    Imprime, por perfil e por posição r da cidade verificada, as médias de
+    c - próprio, vazamento, Bbar, a_i e a_i*Bbar^2, e a matriz de sobreposição
+    O[x, y] = <phi_x|A_y|phi_x> dos nós do veículo 0.
+    """
+    inst = build_instance(C, V, seed)
+    R = inst.R
+    configs = configs_validas(inst, V)
+    perfis = [perfil(routes_from_slots(c, inst)) for c in configs]
+    for d in ds:
+        ops = H.build_modular_operators(d, inst.M, inst.R, HBAR)
+        tab = PE.NodeTable(ops, inst.M, inst.R)
+        print("\n" + "=" * 100)
+        print(f"CAMPO MÉDIO POR VERIFICAÇÃO  C={C} V={V} semente={seed} d={d}")
+        print("=" * 100)
+        print("sobreposição O[x,y] = <phi_x|A_y|phi_x>  (nós do veículo 0; linha = estado)")
+        print(f"{'':>10}" + "".join(f"{'A(0,' + str(y) + ')':>10}" for y in range(R)))
+        for x in range(R):
+            print(f"{'phi(0,' + str(x) + ')':>10}"
+                  + "".join(f"{tab.a[x, y]:>10.4f}" for y in range(R)))
+        for forma in formas:
+            print(f"\ngap_form={forma}")
+            print(f"{'perfil':>10}{'r':>3}{'n':>5}{'c-próprio':>11}{'vazamento':>11}"
+                  f"{'Bbar':>9}{'a_i':>8}{'a_i*Bbar^2':>12}")
+            acc = defaultdict(list)
+            for s, p in zip(configs, perfis):
+                a = tab.a[list(s)]                        # (N, X)
+                cidade_em = {divmod(x, R): i for i, x in enumerate(s)}
+                for i, x in enumerate(s):
+                    v, r = divmod(x, R)
+                    if r < 1:
+                        continue
+                    c, qs = H.gap_operator_spec(forma, r)
+                    proprio, vaz = 0.0, 0.0
+                    for q in qs:
+                        xq = v * R + q
+                        j0 = cidade_em[(v, q)]
+                        proprio += a[j0, xq]
+                        vaz += a[:, xq].sum() - a[j0, xq]
+                    bbar = c - proprio - vaz
+                    acc[(p, r)].append((c - proprio, vaz, bbar, a[i, x],
+                                        a[i, x] * bbar ** 2))
+            for (p, r) in sorted(acc):
+                m = np.mean(np.array(acc[(p, r)]), axis=0)
+                print(f"{str(p):>10}{r:>3}{len(acc[(p, r)]):>5}{m[0]:>11.4f}"
+                      f"{m[1]:>11.4f}{m[2]:>9.4f}{m[3]:>8.4f}{m[4]:>12.5f}")
