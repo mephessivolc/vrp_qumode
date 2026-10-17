@@ -37,6 +37,15 @@ Critério adotado, uniforme em todo o arquivo:
 Para o termo de lacuna, a alternativa (1/2){n, B^2} tem autovalor mínimo
 medido -1.22e-2: existiria estado em que ABRIR uma lacuna reduz a energia.
 
+Forma do termo de lacuna (gap_form)
+-----------------------------------
+O sanduíche B n B vale nas duas formas; muda apenas B_{v,r} = c I - sum_Q n_q:
+  "soma"         c = r, Q = {0..r-1}   forma original (padrão)
+  "predecessor"  c = 1, Q = {r-1}      só o predecessor imediato
+Mesmo conjunto de zeros (atribuições sem lacuna) e coincidem para R <= 2. Ver
+a nota em HamiltonianParams e `gap_operator_spec`. O padrão preserva todos os
+resultados anteriores.
+
 Precisão
 --------
 A construção dos operadores é feita UMA vez em numpy float64 e congelada. Em
@@ -70,6 +79,7 @@ __all__ = [
     "displacement_operator", "fejer_operator", "build_modular_operators",
     "energy_components", "assignment_distribution",
     "node_energy_table", "dense_hamiltonian", "ground_state",
+    "GAP_FORMS", "gap_operator_spec",
 ]
 
 
@@ -155,6 +165,9 @@ class VRPInstance:
     def phi_nodes(self) -> np.ndarray:
         return 2.0 * np.pi * np.arange(self.M) / self.M
 
+GAP_FORMS = ("soma", "predecessor")
+
+
 @dataclass
 class HamiltonianParams:
     """Pesos do Hamiltoniano.
@@ -181,6 +194,7 @@ class HamiltonianParams:
     lambda_vehicle: float = 0.0   # > 0: todos os M veículos são obrigatórios (como no BruteForce)
     lambda_disc: float = 5.0      # evita mínimos fracionários; confira com check_penalties
     lambda_exc: float = 0.0       # confinamento: λ_exc Σ_i ⟨n̂_i⟩ (ver nota abaixo)
+    gap_form: str = "soma"        # forma do termo de lacuna: "soma" | "predecessor"
 
     # ------------------------------------------------------------------
     # Sobre λ_exc (termo de confinamento)
@@ -209,10 +223,45 @@ class HamiltonianParams:
     # anula a vantagem de estados tipo GKP sobre gaussianos. Use
     # `suggest_lambda_exc` para o teto imposto pelo espaçamento de custos.
 
+    # ------------------------------------------------------------------
+    # Sobre gap_form (forma do termo de lacuna)
+    # ------------------------------------------------------------------
+    # Nas duas formas, H_gap = sum_{v, r>=1} B n_{v,r} B (sanduíche; hermitiano
+    # e PSD), com B_{v,r} = c I - sum_{q in Q} n_{v,q}:
+    #   "soma"         c = r,  Q = {0, ..., r-1}   (padrão; forma original)
+    #   "predecessor"  c = 1,  Q = {r-1}           (só o predecessor imediato)
+    # As duas se anulam exatamente no mesmo conjunto (posições sem lacuna) e
+    # coincidem para R <= 2. Para R >= 3 a forma "soma" pesa mais as posições
+    # fundas (peso r e vazamento acumulado de r predecessores), o que dá aos
+    # PERFIS de comprimento de rota overheads de codificação diferentes; em
+    # "predecessor" toda cidade com r >= 1 paga uma única verificação, ou seja,
+    # N - V verificações por configuração válida em qualquer perfil.
+    # λ_gap > U continua suficiente nas duas: toda configuração com lacuna
+    # tem ao menos uma cidade cujo predecessor está vazio, custo >= λ_gap.
+
+    def __post_init__(self) -> None:
+        if self.gap_form not in GAP_FORMS:
+            raise ValueError(f"gap_form deve ser um de {GAP_FORMS}; "
+                             f"recebido {self.gap_form!r}")
+
     def weights(self) -> Tuple[float, ...]:
         return (self.lambda_dist, self.lambda_col, self.lambda_gap,
                 self.lambda_vehicle, self.lambda_cap, self.lambda_disc,
                 self.lambda_exc)
+
+
+def gap_operator_spec(form: str, r: int) -> Tuple[float, Tuple[int, ...]]:
+    """B_{v,r} = c·I − Σ_{q in qs} n_{v,q}, para r >= 1.
+
+    Devolve (c, qs). É a ÚNICA definição de B: energy_components,
+    dense_hamiltonian e hamiltonian_sparse a usam, para que os três caminhos
+    nunca divirjam.
+    """
+    if form == "soma":
+        return float(r), tuple(range(r))
+    if form == "predecessor":
+        return 1.0, (r - 1,)
+    raise ValueError(f"gap_form deve ser um de {GAP_FORMS}; recebido {form!r}")
 
 # ---------------------------------------------------------------------------
 # Codificação
@@ -346,13 +395,16 @@ def suggest_penalties(
     use_capacity: bool = False,
     lambda_disc: float = 1.0,
     margin: float = 1.0,
+    gap_form: str = "soma",
 ) -> HamiltonianParams:
     """Limiares suficientes para que o mínimo NA GRADE seja C*.
 
     U (upper_bound) é qualquer custo >= C*. Por padrão, U = (N + M)·d_max,
     válido para qualquer solução viável (no máximo N + M arcos).
         λ_col     > N·d_max + U
-        λ_gap     > U
+        λ_gap     > U                (nas duas gap_form: toda configuração com
+                                      lacuna tem uma cidade com predecessor
+                                      vazio, que custa >= λ_gap)
         λ_vehicle > U                (se todos os veículos são exigidos)
         λ_cap     > U / δ²           (δ = menor excesso de carga atingível)
     São conservadores; valores menores costumam bastar (teste com
@@ -373,6 +425,7 @@ def suggest_penalties(
         lambda_vehicle=(U + margin) if require_all_vehicles else 0.0,
         lambda_cap=lam_cap,
         lambda_disc=lambda_disc,
+        gap_form=gap_form,
     )
 
 
@@ -736,8 +789,9 @@ def energy_components(psi, inst: VRPInstance, ops: ModularOperators,
     h_gap = bk.zeros_like_scalar(psi)
     for v in range(M):
         for r in range(1, R):
-            Bpsi = float(r) * psi
-            for q in range(r):
+            c_gap, qs = gap_operator_spec(params.gap_form, r)
+            Bpsi = c_gap * psi
+            for q in qs:
                 Bpsi = Bpsi - _occupancy(bk, psi, A, v, q, N)
             # <B n B> = <B psi| n |B psi> >= 0 porque n é PSD
             for i in range(N):
@@ -955,7 +1009,8 @@ def dense_hamiltonian(inst: VRPInstance, ops: ModularOperators,
     Hg = np.zeros((dim, dim), dtype=np.complex128)
     for v in range(M):
         for r in range(1, R):
-            B = float(r) * I - sum(occ[v, q] for q in range(r))
+            c_gap, qs = gap_operator_spec(params.gap_form, r)
+            B = c_gap * I - sum(occ[v, q] for q in qs)
             for i in range(N):
                 Hg += B @ Ae[i, v, r] @ B
 

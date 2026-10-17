@@ -43,14 +43,29 @@ maior que o perfil favorecido, por mais que a diferença de custo entre rotas
 
 Uso
 ---
+Os testes são lançados pelo exp_run.py (parte_a ... parte_d). As linhas de
+comando abaixo existem só para execução direta deste arquivo e NÃO são
+necessárias.
     python exp_perfil_rotas.py            # só a parte A
     python exp_perfil_rotas.py 8          # A e B com d=8
     python exp_perfil_rotas.py 8 12       # A e B com d=8 e d=12
     python exp_perfil_rotas.py c 8 12 16  # só a parte C (amostra, termo a termo)
+    python exp_perfil_rotas.py c 8 12 16 forma=predecessor
+                                          # parte C com o termo de lacuna
+                                          # alternativo; grava resultado_c_predecessor.txt
+                                          # (exige o hamiltonian.py com gap_form)
 
 Parte C: por amostra de configurações válidas de cada perfil, calcula as
 contribuições col, gap, veh e disc e a diferença entre perfis para cada termo,
 em vários d. Mostra QUAL termo cria o viés e se ele encolhe com d.
+
+Parte D: fidelidade de cada NÓ (v,r). F = maior autovalor de A_{v,r}, e 1-F é o
+vazamento mínimo de ocupação do nó para estados-produto. Só matrizes d x d:
+leva segundos até d=64. Hipótese: o nó r=0 (na origem do espaço de fase) é
+resolvido bem melhor que r>=1; o termo de lacuna mede a ocupação do
+PREDECESSOR, então um perfil que usa r=1 como predecessor (cidade em r=2) paga
+mais que um que só usa r=0. Imprime também a razão do vazamento de cada nó em
+relação ao nó r=0 do mesmo veículo e a inclinação log-log de 1-F contra d.
 
 Arquivos gravados (na pasta de execução; sobrescrevem os anteriores):
     parte A      -> resultado_a.txt
@@ -134,9 +149,9 @@ def parte_a(C=4, V=2, seeds=(42, 1, 2, 3, 4, 5)):
               f"  -> melhor custo do(s) perfil(is): {casa if casa else 'NENHUM'}")
 
 
-def parte_b(C=4, V=2, d=8, seed=42, max_configs=300_000):
+def parte_b(C=4, V=2, d=8, seed=42, max_configs=300_000, gap_form="soma"):
     inst = build_instance(C, V, seed)
-    par = make_params(inst, V, "sugerida", 0.0)
+    par = make_params(inst, V, "sugerida", 0.0, gap_form)
     ops = H.build_modular_operators(d, inst.M, inst.R, HBAR)
     print("\n" + "=" * 96)
     print(f"PARTE B  C={C} V={V} d={d}: overhead = <H>(nó) - custo, por perfil "
@@ -162,13 +177,14 @@ def parte_b(C=4, V=2, d=8, seed=42, max_configs=300_000):
               "  (compare com a diferença de custo entre rotas, 2 a 14)")
 
 
-def parte_c(C=4, V=2, ds=(8, 12, 16), n_amostra=8, seed=42, rng_seed=0):
+def parte_c(C=4, V=2, ds=(8, 12, 16), n_amostra=8, seed=42, rng_seed=0,
+            gap_form="soma"):
     """Overhead por perfil, TERMO A TERMO, numa amostra de configurações
     válidas (não percorre as (M*R)^N configurações: leva segundos a poucos
     minutos mesmo em d=16). Responde: (1) qual termo cria a diferença entre
     perfis; (2) como a diferença muda com d."""
     inst = build_instance(C, V, seed)
-    par = make_params(inst, V, "sugerida", 0.0)
+    par = make_params(inst, V, "sugerida", 0.0, gap_form)
     rng = np.random.default_rng(rng_seed)
     por_perfil = defaultdict(list)
     for slots in itertools.product(range(inst.M * inst.R), repeat=C):
@@ -180,7 +196,8 @@ def parte_c(C=4, V=2, ds=(8, 12, 16), n_amostra=8, seed=42, rng_seed=0):
         kets = {(v, r): H.node_state(ops, v, r)
                 for v in range(inst.M) for r in range(inst.R)}
         print("\n" + "=" * 96)
-        print(f"PARTE C  C={C} V={V} d={d}: overhead por termo e perfil "
+        print(f"PARTE C  C={C} V={V} d={d} gap_form={gap_form}: "
+              f"overhead por termo e perfil "
               f"(média de até {n_amostra} configurações válidas)")
         print("=" * 96)
         print(f"{'perfil':>12}{'n':>4}" + "".join(f"{t:>12}" for t in termos))
@@ -210,6 +227,63 @@ def parte_c(C=4, V=2, ds=(8, 12, 16), n_amostra=8, seed=42, rng_seed=0):
             print(f"{'diferença':>16}" + "".join(
                 f"{medias[ps[0]][t] - medias[ps[-1]][t]:>12.2f}" for t in termos)
                 + f"   ({ps[0]} menos {ps[-1]})")
+
+
+def parte_d(C=4, V=2, ds=(8, 12, 16, 24, 32, 48, 64), seed=42):
+    """Vazamento 1 - F de cada nó (v, r), com F = maior autovalor de A_{v,r}.
+
+    Só usa matrizes d x d (nenhum tensor d^N), então é instantâneo mesmo em
+    d=64. Cutoffs grandes que falharem numericamente são registrados e pulados.
+    """
+    inst = build_instance(C, V, seed)
+    M, R = inst.M, inst.R
+    nos = [(v, r) for v in range(M) for r in range(R)]
+    print("=" * 100)
+    print(f"PARTE D  C={C} V={V} (M={M}, R={R}): vazamento 1 - F de cada nó (v, r)")
+    print("=" * 100)
+    print(f"{'d':>5}" + "".join(f"{str(n):>13}" for n in nos))
+
+    tabela = {}
+    for d in ds:
+        try:
+            ops = H.build_modular_operators(d, M, R, HBAR)
+            vaz = {}
+            for (v, r) in nos:
+                A = np.asarray(ops.A[v, r])
+                A = 0.5 * (A + A.conj().T)
+                vaz[(v, r)] = 1.0 - float(np.linalg.eigvalsh(A)[-1])
+            tabela[d] = vaz
+            print(f"{d:>5}" + "".join(f"{vaz[n]:>13.4e}" for n in nos))
+        except Exception as exc:        # cutoffs grandes podem falhar numericamente
+            print(f"{d:>5}  falhou: {exc!r}")
+
+    if not tabela:
+        return tabela
+
+    print("\nrazão do vazamento em relação ao nó r=0 do mesmo veículo")
+    print(f"{'d':>5}" + "".join(f"{str(n):>13}" for n in nos if n[1] > 0))
+    for d, vaz in tabela.items():
+        linha = ""
+        for (v, r) in nos:
+            if r > 0:
+                base = vaz[(v, 0)]
+                linha += f"{(vaz[(v, r)] / base if base > 0 else float('nan')):>13.2f}"
+        print(f"{d:>5}{linha}")
+
+    print("\ninclinação log-log de 1-F contra d, entre cutoffs consecutivos "
+          "(1-F ~ d^(-s))")
+    print(f"{'d_a-d_b':>9}" + "".join(f"{str(n):>13}" for n in nos))
+    ds_ok = sorted(tabela)
+    for a, b in zip(ds_ok[:-1], ds_ok[1:]):
+        linha = ""
+        for n in nos:
+            va, vb = tabela[a][n], tabela[b][n]
+            if va > 0 and vb > 0:
+                linha += f"{np.log(va / vb) / np.log(b / a):>13.2f}"
+            else:
+                linha += f"{'—':>13}"
+        print(f"{str(a) + '-' + str(b):>9}{linha}")
+    return tabela
 
 
 class _Tee:
@@ -244,16 +318,22 @@ def saida(nome):
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
+    forma, args = "soma", []
+    for a in sys.argv[1:]:
+        if a.startswith("forma="):
+            forma = a.split("=", 1)[1]
+        else:
+            args.append(a)
+    sufixo = "" if forma == "soma" else f"_{forma}"
     if args and args[0].lower() == "c":
         ds = tuple(int(x) for x in args[1:]) or (8, 12, 16)
-        with saida("resultado_c.txt"):
-            parte_c(4, 2, ds=ds)
+        with saida(f"resultado_c{sufixo}.txt"):
+            parte_c(4, 2, ds=ds, gap_form=forma)
     else:
         with saida("resultado_a.txt"):
             parte_a(4, 2)
             parte_a(4, 1)
         if args:
-            with saida("resultado_b.txt"):
+            with saida(f"resultado_b{sufixo}.txt"):
                 for arg in args:
-                    parte_b(4, 2, d=int(arg))
+                    parte_b(4, 2, d=int(arg), gap_form=forma)
