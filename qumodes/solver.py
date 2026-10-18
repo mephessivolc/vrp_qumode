@@ -8,7 +8,8 @@ import strawberryfields as sf
 
 # Importações relativas internas do pacote qumodes
 from .ansatz import CircuitConfig, ContinuousVariableAnsatz
-from .hamiltonian import HamiltonianParams, evaluate_sf_state, extract_routes
+from .hamiltonian import HamiltonianParams
+from .sf_bridge import evaluate_sf_state, extract_routes
 
 
 @dataclass

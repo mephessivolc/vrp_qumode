@@ -30,7 +30,7 @@ from typing import List, Optional
 import math
 import numpy as np
 
-from qumodes.hamiltonian import hermite_functions
+from qumodes.sf_bridge import hermite_functions
 
 
 def _project_to_fock(psi_x: np.ndarray, x: np.ndarray, cutoff: int,

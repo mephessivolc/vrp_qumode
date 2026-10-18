@@ -6,6 +6,9 @@ arquivo. Nada é lançado por linha de comando com argumentos. Cada bloco grava
 seus resultados em arquivo (nomes abaixo) e também mostra na tela.
 
 bloco                  arquivo(s) gerado(s)                          duração
+vqe_ponte              resultado_vqe_ponte.txt                       segundos
+vqe_pequeno            resultado_vqe.txt, vqe_resultados.csv,        ~10-30 min
+                       vqe_iterados_<tag>.csv
 fatorado_verificacao   resultado_f_verificacao.txt                   segundos
 fatorado_fantasma      resultado_f_fantasma.txt                      segundos
 fatorado_validacao     resultado_f_validacao.txt                     minutos
@@ -34,9 +37,13 @@ quiser guardar. Os blocos já executados e analisados ficam desligados.
 
 EXECUTAR = {
     # caminho B: estados-produto sem tensor d^N
-    "fatorado_verificacao": True,       # roda sempre antes dos outros blocos fatorados
-    "fatorado_fantasma": True,            # NOVO: lacuna por tipo de verificação
-    "fatorado_validacao": True,           # NOVO: sementes novas, V=1 e C=5 (substituto)
+    # VQE: ponte SF -> Hamiltoniano em operadores (NOVO)
+    "vqe_ponte": True,                    # roda sempre antes do VQE; se falhar, o VQE é pulado
+    "vqe_pequeno": True,                  # VQE contra o fundamental exato, C=3, d=8
+    # caminho B (estados-produto) — já analisados
+    "fatorado_verificacao": False,
+    "fatorado_fantasma": False,
+    "fatorado_validacao": False,
     "fatorado_decomposicao_exata": False, # já analisado
     "fatorado_distinta": False,           # já analisado
     "fatorado_campo_medio": False,        # já analisado
@@ -56,6 +63,21 @@ EXECUTAR = {
 
 def main():
     from exp_perfil_rotas import parte_a, parte_c, parte_d, saida
+
+    # --- VQE ---------------------------------------------------------------------
+    if EXECUTAR["vqe_ponte"] or EXECUTAR["vqe_pequeno"]:
+        import exp_vqe as EV
+
+        with saida("resultado_vqe_ponte.txt"):
+            ponte_ok = EV.verificar_ponte()
+        if not ponte_ok:
+            print("\nA ponte FALHOU: o VQE foi pulado.")
+        elif EXECUTAR["vqe_pequeno"]:
+            with saida("resultado_vqe.txt"):
+                # R=2: caso em que o fundamental já pesa na rota ótima
+                EV.vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100)
+                # R=3, perfil único
+                EV.vqe_vs_exato(C=3, V=1, seed=42, cutoff=8, layers=2, maxiter=100)
 
     # --- caminho B ----------------------------------------------------------
     blocos_fatorados = ("fatorado_verificacao", "fatorado_fantasma",
