@@ -304,17 +304,20 @@ class _Tee:
 
 
 @contextlib.contextmanager
-def saida(nome):
-    """Tudo o que for impresso dentro do bloco vai para a tela E para `nome`
-    (UTF-8, na pasta de execução; sobrescreve o arquivo anterior)."""
-    with open(nome, "w", encoding="utf-8") as fh:
+def saida(nome, pasta="diagnosticos"):
+    """Tudo o que for impresso dentro do bloco vai para a tela E para `nome`,
+    gravado pelo PathManager em PathManager("qumodes", pasta) (UTF-8; sobrescreve
+    o arquivo anterior com o mesmo nome)."""
+    from saidas import caminho
+    destino = caminho(nome, pasta)
+    with open(destino, "w", encoding="utf-8") as fh:
         antigo = sys.stdout
         sys.stdout = _Tee(antigo, fh)
         try:
             yield
         finally:
             sys.stdout = antigo
-    print(f"saída gravada em {nome}")
+    print(f"saída gravada em {destino}")
 
 
 if __name__ == "__main__":

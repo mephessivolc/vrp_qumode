@@ -132,9 +132,11 @@ def routes_from_slots(slots, inst) -> List[List[int]]:
     return routes
 
 
-def is_valid_assignment(slots, inst, require_all: bool) -> bool:
+def is_valid_assignment(slots, inst, require_all: bool,
+                        check_capacity: bool = False) -> bool:
     """Em cada veículo as posições são distintas e formam {0, ..., k-1}; com
-    require_all, todo veículo atende ao menos uma cidade."""
+    require_all, todo veículo atende ao menos uma cidade; com check_capacity, a
+    carga de cada veículo (soma das demandas) não excede a sua capacidade."""
     R = inst.R
     pos = [[] for _ in range(inst.M)]
     for s in slots:
@@ -144,6 +146,16 @@ def is_valid_assignment(slots, inst, require_all: bool) -> bool:
             return False
     if require_all and any(len(p) == 0 for p in pos):
         return False
+    if check_capacity and inst.demands is not None and inst.Q is not None:
+        d = np.asarray(inst.demands, dtype=np.float64).reshape(-1)
+        if d.size == inst.N + 1:            # demandas com o depósito no índice 0
+            d = d[1:]
+        Q = np.broadcast_to(np.asarray(inst.Q, dtype=np.float64).reshape(-1), (inst.M,))
+        carga = np.zeros(inst.M)
+        for i, s in enumerate(slots):
+            carga[int(s) // R] += d[i]
+        if np.any(carga > Q + 1e-9):
+            return False
     return True
 
 
@@ -160,11 +172,12 @@ def extract_routes(state, N: int, M: int, D, demands, Q, cutoff: int, params,
     rng = np.random.default_rng(seed)
     sorteio = np.unique(rng.choice(flat.size, size=int(shots), p=flat))
     req = bool(H.requires_all_vehicles(params, None))
+    cap = bool(getattr(params, "lambda_cap", 0.0) > 0 and M > 1)
 
     melhor = None
     for f in sorteio:
         slots = np.unravel_index(int(f), dist.shape)
-        if not is_valid_assignment(slots, inst, req):
+        if not is_valid_assignment(slots, inst, req, cap):
             continue
         rotas = routes_from_slots(slots, inst)
         custo = H.routes_cost(rotas, inst.D)

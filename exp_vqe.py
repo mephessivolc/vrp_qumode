@@ -109,7 +109,7 @@ def _estatisticas(psi, inst, ops, par, optset, req):
 
 def vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100, lr=0.05,
                  lr_final=0.005, fd_eps=1e-2, init="vacuo", theta_scale=0.05,
-                 csv_path="vqe_resultados.csv", tag=None):
+                 theta_seed=None, csv_path="vqe_resultados_v2.csv", tag=None):
     """init: 'vacuo' (o ansatz parte do vácuo) ou 'nos' (um ket de nó por cidade,
     em nós distintos: warm start que NÃO conhece qual configuração é a ótima)."""
     inst = build_instance(C, V, seed)
@@ -117,11 +117,13 @@ def vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100, lr=0.05,
     par = make_params(inst, V, "sugerida", 0.0, "soma")
     ops = H.build_modular_operators(cutoff, inst.M, inst.R, HBAR)
     req = V > 1
-    tag = tag or f"C{C}V{V}s{seed}d{cutoff}_{init}"
+    theta_seed = seed if theta_seed is None else theta_seed
+    tag = tag or f"C{C}V{V}s{seed}t{theta_seed}d{cutoff}_{init}"
 
     print("=" * 100)
     print(f"VQE  C={C} V={V} semente={seed} d={cutoff} R={inst.R} camadas={layers} "
-          f"init={init}  C*={cstar:g}  rotas ótimas={len(optset)}")
+          f"init={init} semente_theta={theta_seed}  C*={cstar:g}  "
+          f"rotas ótimas={len(optset)}")
     print("=" * 100)
 
     # --- alvo: fundamental exato no mesmo cutoff -----------------------------
@@ -130,6 +132,14 @@ def vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100, lr=0.05,
     est_gs = _estatisticas(gs["psi"], inst, ops, par, optset, req)
     print(f"fundamental exato: E0={gs['energy']:.4f}  ({time.time() - t0:.1f} s)")
 
+    # linha de base: distribuição UNIFORME sobre as (M*R)^N configurações
+    X = inst.M * inst.R
+    dist_u = np.full((X,) * C, 1.0 / float(X) ** C)
+    pv_u, po_u, _ = valid_stats(dist_u, inst, optset, req)
+    est_u = dict(E=float("nan"), nbar=float("nan"), p_valid=pv_u,
+                 p_opt_cond=(po_u / pv_u if pv_u > 0 else float("nan")),
+                 p_opt_raw=po_u, disparos=(1.0 / po_u if po_u > 0 else float("inf")))
+
     # --- VQE ---------------------------------------------------------------------
     kets = None
     if init == "nos":
@@ -137,7 +147,7 @@ def vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100, lr=0.05,
     pi = ProblemInstance(V=V, C=C, D=inst.D, demands=inst.demands, Q=inst.Q)
     solver = VQESolver(pi, CircuitConfig(C, layers), par, cutoff=cutoff,
                        initial_ket=kets)
-    theta0 = solver.ansatz.generate_initial_theta(seed=seed, scale=theta_scale)
+    theta0 = solver.ansatz.generate_initial_theta(seed=theta_seed, scale=theta_scale)
     print(f"parâmetros P={len(theta0)}  avaliações por iteração={2 * len(theta0) + 1}  "
           f"iterações={maxiter}")
     t0 = time.time()
@@ -157,19 +167,22 @@ def vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100, lr=0.05,
     print(f"\nVQE terminou em {secs:.1f} s ({m.circuit_evaluations} avaliações)")
     print(f"{'':>22}{'E':>12}{'nbar':>8}{'P(válida)':>11}{'P(ót|vál)':>11}"
           f"{'P(ótima)':>11}{'disparos':>11}")
-    for nome, e in (("fundamental exato", est_gs), ("VQE", est_vq)):
+    for nome, e in (("uniforme (sem info.)", est_u), ("fundamental exato", est_gs),
+                    ("VQE", est_vq)):
         print(f"{nome:>22}{e['E']:>12.4f}{e['nbar']:>8.2f}{e['p_valid']:>11.4f}"
               f"{e['p_opt_cond']:>11.4f}{e['p_opt_raw']:>11.5f}{e['disparos']:>11.1f}")
     print(f"\nE_vqe - E0 = {est_vq['E'] - est_gs['E']:.4f}   "
           f"fidelidade |<GS|VQE>|^2 = {fid:.4f}   rota decodificada: {m.best_routes}")
 
-    with open(f"vqe_iterados_{tag}.csv", "w", newline="", encoding="utf-8") as fh:
+    destino_it = os.path.join(os.path.dirname(csv_path) or ".", f"vqe_iterados_{tag}.csv")
+    with open(destino_it, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["iteracao", "energia"])
         for i, e in enumerate(m.iterate_history):
             w.writerow([i, e])
 
-    linha = dict(tag=tag, C=C, V=V, seed=seed, cutoff=cutoff, layers=layers,
+    linha = dict(tag=tag, C=C, V=V, seed=seed, theta_seed=theta_seed,
+                 disparos_unif=est_u["disparos"], cutoff=cutoff, layers=layers,
                  init=init, maxiter=maxiter, lr=lr, c_star=cstar,
                  E0=gs["energy"], E_vqe=est_vq["E"],
                  dE=est_vq["E"] - est_gs["E"], fidelidade=fid,
