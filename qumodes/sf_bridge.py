@@ -92,7 +92,11 @@ def prepare(M: int, N: int, D, demands, Q, cutoff: int, params, hbar: float = 2.
 def _ket_of(state, cutoff: int, N: int) -> np.ndarray:
     ket = state.ket()
     if ket is None:
-        raise ValueError("estado misto: o backend Fock deve devolver estado puro.")
+        raise ValueError(
+            f"state.ket() devolveu None (state.is_pure = {getattr(state, 'is_pure', '?')}). "
+            "O backend Fock precisa devolver estado PURO. Causa provável: estado "
+            "inicial preparado com um Ket por modo; use um único Ket multimodo "
+            "(ansatz.py corrigido) ou parta do vácuo.")
     return np.asarray(ket, dtype=np.complex128).reshape((int(cutoff),) * int(N))
 
 

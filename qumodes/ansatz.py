@@ -38,6 +38,7 @@ class ContinuousVariableAnsatz:
         self.total_params = self.num_params_per_layer * self.layers
         self.use_kerr = bool(use_kerr)
         self.initial_ket = None
+        self._initial_product = None
         if initial_ket is not None:
             kets = [np.asarray(k, dtype=np.complex128) for k in initial_ket]
             if len(kets) != self.N:
@@ -46,6 +47,12 @@ class ContinuousVariableAnsatz:
             if len(dims) != 1 or kets[0].ndim != 1:
                 raise ValueError("todos os kets devem ser vetores 1-D de mesma dimensão.")
             self.initial_ket = [k / np.linalg.norm(k) for k in kets]
+            # Um único Ket multimodo mantém o estado PURO no backend Fock; um Ket
+            # por modo faz o SF tratá-lo como misto (state.ket() devolve None).
+            psi = self.initial_ket[0]
+            for k in self.initial_ket[1:]:
+                psi = np.multiply.outer(psi, k)
+            self._initial_product = psi
 
     def _calculate_params_per_layer(self) -> int:
         # Parâmetros por qumode: Squeezing (2), Rotação (1), Deslocamento (2), Kerr (1)
@@ -87,9 +94,8 @@ class ContinuousVariableAnsatz:
 
         with prog.context as q:
             # 0. Estado inicial (opcional): substitui o vácuo
-            if self.initial_ket is not None:
-                for i in range(self.N):
-                    Ket(self.initial_ket[i]) | q[i]
+            if self._initial_product is not None:
+                Ket(self._initial_product) | tuple(q)
 
             for _ in range(self.layers):
                 # 1. Camada de Squeezing e Rotação Inicial
