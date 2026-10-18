@@ -7,8 +7,13 @@ seus resultados em arquivo (nomes abaixo) e também mostra na tela.
 
 bloco                  arquivo(s) gerado(s)                          duração
 vqe_ponte              resultado_vqe_ponte.txt                       segundos
-vqe_pequeno            resultado_vqe.txt, vqe_resultados.csv,        ~10-30 min
+vqe_pequeno            resultado_vqe.txt, vqe_resultados.csv,        ~2 min
                        vqe_iterados_<tag>.csv
+vqe_c4                 (substituído pela varredura)
+vqe_varredura_c3       resultado_vqe_varredura_c3.txt,               ~20-40 min
+                       vqe_varredura_c3.csv   (12 execuções)
+vqe_varredura_c4       resultado_vqe_varredura_c4.txt,               horas (6 execuções)
+                       vqe_varredura_c4.csv
 fatorado_verificacao   resultado_f_verificacao.txt                   segundos
 fatorado_fantasma      resultado_f_fantasma.txt                      segundos
 fatorado_validacao     resultado_f_validacao.txt                     minutos
@@ -39,7 +44,11 @@ EXECUTAR = {
     # caminho B: estados-produto sem tensor d^N
     # VQE: ponte SF -> Hamiltoniano em operadores (NOVO)
     "vqe_ponte": True,                    # roda sempre antes do VQE; se falhar, o VQE é pulado
-    "vqe_pequeno": True,                  # VQE contra o fundamental exato, C=3, d=8
+    "vqe_pequeno": False,                 # já analisado (C=3, d=8)
+    "vqe_c4": False,                      # substituído pela varredura abaixo
+    # varredura principal: o VQE acha a solução viável e IGUAL à força bruta?
+    "vqe_varredura_c3": True,             # C=3, V=1,2, camadas 1-3, 2 sementes de theta
+    "vqe_varredura_c4": False,            # C=4, V=1,2,3, camadas 1-2 — MUITO LONGA
     # caminho B (estados-produto) — já analisados
     "fatorado_verificacao": False,
     "fatorado_fantasma": False,
@@ -65,7 +74,8 @@ def main():
     from exp_perfil_rotas import parte_a, parte_c, parte_d, saida
 
     # --- VQE ---------------------------------------------------------------------
-    if EXECUTAR["vqe_ponte"] or EXECUTAR["vqe_pequeno"]:
+    if (EXECUTAR["vqe_ponte"] or EXECUTAR["vqe_pequeno"] or EXECUTAR["vqe_c4"]
+            or EXECUTAR["vqe_varredura_c3"] or EXECUTAR["vqe_varredura_c4"]):
         import exp_vqe as EV
 
         with saida("resultado_vqe_ponte.txt"):
@@ -78,6 +88,34 @@ def main():
                 EV.vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100)
                 # R=3, perfil único
                 EV.vqe_vs_exato(C=3, V=1, seed=42, cutoff=8, layers=2, maxiter=100)
+        if ponte_ok and EXECUTAR["vqe_varredura_c3"]:
+            import exp_vqe_busca as EB
+
+            with saida("resultado_vqe_varredura_c3.txt"):
+                linhas = EB.varredura_vqe(cidades=(3,), veiculos=(1, 2),
+                                          camadas=(1, 2, 3), cutoffs={3: 8},
+                                          seeds_instancia=(42,), seeds_theta=(0, 1),
+                                          maxiter=100,
+                                          csv_path="vqe_varredura_c3.csv")
+                EB.resumo_varredura(linhas)
+        if ponte_ok and EXECUTAR["vqe_varredura_c4"]:
+            import exp_vqe_busca as EB
+
+            with saida("resultado_vqe_varredura_c4.txt"):
+                linhas = EB.varredura_vqe(cidades=(4,), veiculos=(1, 2, 3),
+                                          camadas=(1, 2), cutoffs={4: 10},
+                                          seeds_instancia=(42,), seeds_theta=(0,),
+                                          maxiter=100,
+                                          csv_path="vqe_varredura_c4.csv")
+                EB.resumo_varredura(linhas)
+        if ponte_ok and EXECUTAR["vqe_c4"]:
+            with saida("resultado_vqe_c4.txt"):
+                # V=1 (perfil único), V=2 na semente 42 (o fundamental falha em
+                # d=10: P(ótima|válida) 0,025 contra acaso 0,056) e na semente 3
+                # (o fundamental funciona). theta inicial com semente própria (0).
+                for (v, s) in ((1, 42), (2, 42), (2, 3)):
+                    EV.vqe_vs_exato(C=4, V=v, seed=s, cutoff=10, layers=2,
+                                    maxiter=100, theta_seed=0)
 
     # --- caminho B ----------------------------------------------------------
     blocos_fatorados = ("fatorado_verificacao", "fatorado_fantasma",

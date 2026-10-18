@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 import math
 import time
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 import numpy as np
 from scipy.optimize import minimize
 import strawberryfields as sf
@@ -184,17 +184,24 @@ class VQESolver:
         beta2: float = 0.999,
         eps_adam: float = 1e-8,
         fd_eps: float = 1e-2,
+        callback: Optional[Callable[[int, np.ndarray, float], None]] = None,
     ) -> np.ndarray:
         """ADAM com gradiente por diferenças finitas.
 
         Registra uma energia por iteração em `iterate_history`, com exatamente
         maxiter + 1 pontos (o ponto inicial e um por atualização de theta).
+
+        callback(t, theta, energia), se dado, é chamado no iterado inicial (t=0)
+        e depois de cada atualização (t=1..maxiter). Serve para decodificar a
+        solução ao longo do treino; não altera o ADAM nem os históricos.
         """
         theta = initial_theta.copy()
         m = np.zeros_like(theta)
         v = np.zeros_like(theta)
 
         self.iterate_history.append(self._cost_function(theta))
+        if callback is not None:
+            callback(0, theta, self.iterate_history[-1])
 
         for t in range(1, maxiter + 1):
             grad = self._compute_numerical_gradient(theta, eps=fd_eps)
@@ -211,6 +218,8 @@ class VQESolver:
 
             theta = theta - lr_t * m_hat / (np.sqrt(v_hat) + eps_adam)
             self.iterate_history.append(self._cost_function(theta))
+            if callback is not None:
+                callback(t, theta, self.iterate_history[-1])
 
         return theta
 
@@ -239,6 +248,7 @@ class VQESolver:
         lr_final: Optional[float] = None,
         fd_eps: float = 1e-2,
         initial_theta: Optional[np.ndarray] = None,
+        callback: Optional[Callable[[int, np.ndarray, float], None]] = None,
     ) -> SolverMetrics:
         if initial_theta is None:
             initial_theta = self.ansatz.generate_initial_theta()
@@ -256,6 +266,7 @@ class VQESolver:
                 lr=lr,
                 lr_final=lr_final,
                 fd_eps=fd_eps,
+                callback=callback,
             )
             final_energy = self.iterate_history[-1]
             evals_per_iter = 2 * n_params + 1
