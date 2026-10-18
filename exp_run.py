@@ -12,6 +12,15 @@ do path.py). Cada bloco usa a sua pasta (nomes em minúsculas):
 bloco                       pasta (dentro de qumodes/)       execuções
 vqe_ponte                   vqe_ponte                         gate do VQE
 tese_instancias             <pasta de cada bloco>             gate das tuplas (C, V, L)
+v2_c3_grade                 vqe_tese_v2                       90 (C=3; V=1,2; L=1-3; 5 cutoffs x 3 lr)
+v2_c4                       vqe_tese_v2                       18 (C=4; V=1,2,3; L=1-3; lr 0,05 e 0,02)
+v2_c5                       vqe_tese_v2                       12 (C=5; V=1,2,3; L=1-2; lr 0,05 e 0,02)
+
+Os blocos v2 gravam TODOS os resultados na mesma pasta (vqe_tese_v2): summary.csv
+único (uma linha por experimento), instancias.csv, runs/, arrays/, logs/, figures/.
+Novidades v2 na tabela: fundamental exato decodificado (gs_*), rho inicial e final,
+ganho do treino, P(acerto, 16 disparos), solução mais provável e critério "forte".
+(Blocos abaixo = resultados anteriores, já analisados.)
 tese_base                   vqe_tese_base                     6  (C=3; V=1,2; L=1,2,3)
 tese_hiperparametros        vqe_tese_hp                       8  (V=1,2; L=2; base, it500, lr02, lr10)
 tese_cutoff                 vqe_tese_cutoff                   10 (V=1,2; cutoff = C, C+2, C+5, C+7, C+9)
@@ -51,6 +60,23 @@ HP_VARIANTES = {
     "lr10": dict(max_iter=500, lr=0.10, lr_final=0.010, cutoff_extra=0),
 }
 
+# ---- vqe_tese_v2: todos os resultados novos vão para UMA pasta -------------------
+PASTA_V2 = "vqe_tese_v2"
+
+# C = 4 e 5: duas taxas de aprendizado (a taxa foi o sobreparâmetro decisivo em C=3).
+HP_V2 = {
+    "lr05": dict(max_iter=300, lr=0.05, lr_final=0.005, cutoff_extra=0),
+    "lr02": dict(max_iter=300, lr=0.02, lr_final=0.002, cutoff_extra=0),
+}
+
+# C = 3: grade cutoff (C + k, k = 0, 2, 5, 7, 9 -> 3, 5, 8, 10, 12) x lr (0,02; 0,05;
+# 0,10). Combinada com camadas 1-3 e V = 1, 2 na tupla (C, V, L).
+HP_GRADE = {
+    f"dC{k}_lr{nome}": dict(max_iter=300, lr=lr, lr_final=lr / 10.0, cutoff_rel_C=k)
+    for k in (0, 2, 5, 7, 9)
+    for nome, lr in (("02", 0.02), ("05", 0.05), ("10", 0.10))
+}
+
 # Cutoff como sobreparâmetro: cutoff = C + k (k = 0: cutoff igual ao número de
 # cidades). Hipótese em teste: cutoff maior, solução melhor. Para C=3 isto dá
 # cutoffs 3, 5, 8, 10 e 12.
@@ -63,10 +89,15 @@ EXECUTAR = {
     # --- resultados da tese (CVRP; instâncias do Graph; capacidade ativa) ----------
     "vqe_ponte": True,                     # roda antes de qualquer VQE; se falhar, o VQE é pulado
     "tese_instancias": True,               # confere viabilidade de cada tupla antes de rodar o VQE
-    "tese_base": True,                     # C=3, V=1,2, camadas 1-3, sobreparâmetros base
-    "tese_hiperparametros": True,          # C=3, V=1,2, L=2, variando iterações e lr
-    "tese_cutoff": True,                   # C=3, V=1,2, L=2, cutoff = C, C+2, C+5, C+7, C+9
-    "tese_c4": False,                      # C=4, V=1,2,3, camadas 1-2 — MUITO LONGO
+    # --- pasta vqe_tese_v2: critérios novos (ρ inicial/final, fundamental decodificado) ---
+    "v2_c3_grade": True,                   # C=3, V=1,2, L=1-3, cutoff (C+k) x lr  (90 execuções)
+    "v2_c4": True,                         # C=4, V=1,2,3, L=1-3, lr 0,05 e 0,02   (18 execuções)
+    "v2_c5": True,                         # C=5, V=1,2,3, L=1-2, lr 0,05 e 0,02   (12 execuções)
+    # --- resultados anteriores (já analisados; pastas vqe_tese_base/hp/cutoff/c4) ---------
+    "tese_base": False,
+    "tese_hiperparametros": False,
+    "tese_cutoff": False,
+    "tese_c4": False,
     # --- diagnósticos anteriores (já analisados) ------------------------------------
     "vqe_pequeno": False,
     "vqe_varredura_c3": False,
@@ -98,9 +129,9 @@ def main():
     # ======================================================================
     # VQE: ponte, instâncias e resultados da tese
     # ======================================================================
-    blocos_vqe = ("vqe_ponte", "tese_instancias", "tese_base", "tese_hiperparametros",
-                  "tese_cutoff", "tese_c4", "vqe_pequeno", "vqe_varredura_c3",
-                  "vqe_varredura_c4", "vqe_c4")
+    blocos_vqe = ("vqe_ponte", "tese_instancias", "v2_c3_grade", "v2_c4", "v2_c5",
+                  "tese_base", "tese_hiperparametros", "tese_cutoff", "tese_c4",
+                  "vqe_pequeno", "vqe_varredura_c3", "vqe_varredura_c4", "vqe_c4")
     ponte_ok = False
     if any(EXECUTAR[k] for k in blocos_vqe):
         import exp_vqe as EV
@@ -110,11 +141,12 @@ def main():
         if not ponte_ok:
             print("\nA ponte FALHOU: o VQE foi pulado.")
 
-    if ponte_ok and (EXECUTAR["tese_base"] or EXECUTAR["tese_hiperparametros"]
+    if ponte_ok and (EXECUTAR["v2_c3_grade"] or EXECUTAR["v2_c4"] or EXECUTAR["v2_c5"]
+                     or EXECUTAR["tese_base"] or EXECUTAR["tese_hiperparametros"]
                      or EXECUTAR["tese_cutoff"] or EXECUTAR["tese_c4"]):
         import exp_vqe_tese as TV
 
-        def bloco_tese(nome, tuplas, hiperparametros, pasta):
+        def bloco_tese(nome, tuplas, hiperparametros, pasta, **extra):
             if EXECUTAR["tese_instancias"]:
                 with saida(f"instancias_{nome}.txt", pasta):
                     viaveis = TV.verificar_instancias(tuplas, pasta=pasta, Q_val=Q_VAL,
@@ -126,8 +158,23 @@ def main():
                 return
             with saida(f"resultado_{nome}.txt", pasta):
                 linhas = TV.varredura_tese(viaveis, hiperparametros=hiperparametros,
-                                           pasta=pasta, Q_val=Q_VAL, folga=FOLGA)
+                                           pasta=pasta, Q_val=Q_VAL, folga=FOLGA, **extra)
                 TV.resumo_tese(linhas)
+
+        # --- vqe_tese_v2: critérios novos; todos os resultados na MESMA pasta ---------
+        if EXECUTAR["v2_c3_grade"]:
+            bloco_tese("v2_c3_grade",
+                       [(3, V, L) for V in (1, 2) for L in (1, 2, 3)],
+                       HP_GRADE, PASTA_V2)
+        if EXECUTAR["v2_c4"]:
+            bloco_tese("v2_c4",
+                       [(4, V, L) for V in (1, 2, 3) for L in (1, 2, 3)],
+                       HP_V2, PASTA_V2)
+        if EXECUTAR["v2_c5"]:
+            # N = 5: (M*R)^N configurações por distribuição; menos checkpoints
+            bloco_tese("v2_c5",
+                       [(5, V, L) for V in (1, 2, 3) for L in (1, 2)],
+                       HP_V2, PASTA_V2, n_checkpoints=10)
 
         if EXECUTAR["tese_base"]:
             bloco_tese("tese_base",

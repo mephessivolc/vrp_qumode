@@ -69,8 +69,11 @@ plt.switch_backend("Agg")
 
 HBAR = 2.0
 SHOTS = (16, 64, 256, 1024)
-LIMIAR_ACERTO = 0.99
-CUTOFF_BASE = {3: 8, 4: 10, 5: 10}
+# Critérios que DISTINGUEM aprendizado de acaso (o critério "ver a ótima em 1024
+# disparos" é satisfeito até pelo estado inicial nas instâncias pequenas):
+LIMIAR_P16 = 0.9      # P(ver a ótima em 16 disparos) >= 0,9
+LIMIAR_RHO = 2.0      # rho = P(ótima)/P(ótima uniforme) >= 2
+CUTOFF_BASE = {3: 8, 4: 10, 5: 8}
 HIPERPARAMETROS_BASE = {
     "base": dict(max_iter=200, lr=0.05, lr_final=0.005, cutoff_extra=0),
 }
@@ -190,22 +193,33 @@ def _distribuicao(ket, inst, ops):
 
 
 def _estatisticas(dist, inst, D, optset, req, cap):
+    """Massa do POVM por SOLUÇÃO viável (conjunto de rotas; vários arranjos de
+    posição/veículo da mesma solução somam). Devolve P(válida), P(ótima), a
+    solução MAIS PROVÁVEL e se ela é ótima, e o custo médio entre as válidas."""
     flat = np.clip(dist.reshape(-1), 0.0, None)
     flat = flat / flat.sum()
-    p_valid = p_otima = soma = 0.0
+    massas, custos = {}, {}
     for f in np.flatnonzero(flat > 1e-12):
         slots = np.unravel_index(int(f), dist.shape)
         if not SB.is_valid_assignment(slots, inst, req, cap):
             continue
-        w = float(flat[f])
         rotas = SB.routes_from_slots(slots, inst)
-        p_valid += w
-        soma += w * _custo_rotas(D, rotas)
-        if _canon(rotas) in optset:
-            p_otima += w
+        k = _canon(rotas)
+        massas[k] = massas.get(k, 0.0) + float(flat[f])
+        if k not in custos:
+            custos[k] = _custo_rotas(D, rotas)
+    p_valid = sum(massas.values())
+    p_otima = sum(m for k, m in massas.items() if k in optset)
+    soma = sum(m * custos[k] for k, m in massas.items())
+    if massas:
+        k_top = max(massas, key=massas.get)
+        top_otima, top_massa, top_custo = k_top in optset, massas[k_top], custos[k_top]
+    else:
+        top_otima, top_massa, top_custo = False, 0.0, float("nan")
     return dict(p_valid=p_valid, p_otima=p_otima,
                 p_ot_cond=(p_otima / p_valid if p_valid > 0 else float("nan")),
-                custo_medio_valido=(soma / p_valid if p_valid > 0 else float("nan")))
+                custo_medio_valido=(soma / p_valid if p_valid > 0 else float("nan")),
+                top_otima=bool(top_otima), top_massa=top_massa, top_custo=top_custo)
 
 
 def _decodificar(dist, inst, D, req, cap, shots, seed):
@@ -269,7 +283,7 @@ def plot_convergencia(iterate_history, c_star, e0, cutoff, titulo, destino):
 def plot_decodificacao(checkpoints, c_star, titulo, destino):
     its = [c["it"] for c in checkpoints]
     custo = [c["custo_dec"] for c in checkpoints]
-    pac = [c["pacerto_1024"] for c in checkpoints]
+    pac = [c["pacerto_16"] for c in checkpoints]
     fig, ax = plt.subplots(figsize=(8, 4.8))
     ax.plot(its, custo, "o-", color="tab:blue", lw=1.5, ms=4,
             label="custo da rota decodificada (1024 disparos)")
@@ -280,7 +294,7 @@ def plot_decodificacao(checkpoints, c_star, titulo, destino):
     ax.grid(True, alpha=0.3)
     ax2 = ax.twinx()
     ax2.plot(its, pac, "-", color="tab:orange", lw=1.2, alpha=0.8,
-             label="P(ver a ótima em 1024 disparos)")
+             label="P(ver a ótima em 16 disparos)")
     ax2.set_ylim(-0.02, 1.05)
     ax2.set_ylabel("Probabilidade")
     h1, l1 = ax.get_legend_handles_labels()
@@ -382,9 +396,10 @@ def verificar_instancias(tuplas, pasta="vqe_tese", seed=42, Q_val="auto",
 def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base",
                          pasta="vqe_tese", seed=42, Q_val="auto", demand_range=(1, 5),
                          folga=1.2, fd_eps=1e-2, theta_scale=0.05, checkpoint_cada=None,
-                         shots_decodificacao=1024, figura_decodificacao=True):
+                         n_checkpoints=20, shots_decodificacao=1024,
+                         figura_decodificacao=True):
     exp = f"c{C}_v{V}_l{L}_{nome_hp}"
-    checkpoint_cada = checkpoint_cada or max(1, max_iter // 20)
+    checkpoint_cada = checkpoint_cada or max(1, max_iter // n_checkpoints)
     gm = gerenciador(pasta)
     log = setup_logger(name=exp, log_file=gm.get_file_path(f"logs/{exp}.log"))
     log.info(f"=== {exp}: C={C} V={V} L={L} cutoff={cutoff} it={max_iter} lr={lr}->{lr_final} ===")
@@ -424,13 +439,25 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
     inst, par = _hamiltoniano(C, V, D, demands, Q)
     ops = H.build_modular_operators(cutoff, inst.M, inst.R, HBAR)
     t0 = time.time()
-    e0 = float(HS.ground_state_sparse(inst, ops, par)["energy"])
+    gs = HS.ground_state_sparse(inst, ops, par)
+    e0 = float(gs["energy"])
     t_gs = time.time() - t0
     X = inst.M * inst.R
     dist_u = np.full((X,) * C, 1.0 / float(X) ** C)
     est_u = _estatisticas(dist_u, inst, D, optset, req, cap)
+    # solução decodificada do ESTADO FUNDAMENTAL exato (menor energia de H)
+    dist_gs = np.asarray(gs["distribution"], dtype=np.float64)
+    est_gs = _estatisticas(dist_gs, inst, D, optset, req, cap)
+    dec_gs = _decodificar(dist_gs, inst, D, req, cap, shots_decodificacao, seed)
+    gs_custo_dec = dec_gs[0] if dec_gs is not None else float("nan")
+    gs_ok_custo = bool(dec_gs is not None and abs(gs_custo_dec - bf_custo) < 1e-9)
+    gs_rho = (est_gs["p_otima"] / est_u["p_otima"]
+              if est_u["p_otima"] > 0 else float("nan"))
     log.info(f"menor energia de H (cutoff {cutoff}): E0={e0:.4f} ({format_timespan(t_gs)}); "
              f"P(ótima) uniforme={est_u['p_otima']:.5f}")
+    log.info(f"fundamental exato decodificado: custo={gs_custo_dec} (C*={bf_custo:.4f}) "
+             f"igual={gs_ok_custo} | rho={gs_rho:.2f} | solução mais provável é ótima: "
+             f"{est_gs['top_otima']}")
 
     # 3. VQE -------------------------------------------------------------------
     pi = ProblemInstance(V=V, C=C, D=D, demands=demands, Q=Q)
@@ -446,7 +473,9 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
         est = _estatisticas(dist, inst, D, optset, req, cap)
         dec = _decodificar(dist, inst, D, req, cap, shots_decodificacao, seed)
         cp = dict(it=t, energia=energia, p_valid=est["p_valid"], p_otima=est["p_otima"],
+                  pacerto_16=_p_acerto(est["p_otima"], 16),
                   pacerto_1024=_p_acerto(est["p_otima"], 1024),
+                  top_otima=est["top_otima"],
                   custo_dec=(dec[0] if dec is not None else float("nan")))
         checkpoints.append(cp)
         log.info(f"it {t:>4}  E={energia:9.3f}  P(válida)={est['p_valid']:.4f}  "
@@ -474,8 +503,18 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
     ok_custo = bool(viavel and abs(custo_dec - bf_custo) < 1e-9)
     ok_rota = bool(viavel and _canon(rotas_dec) in optset)
     pac = {s: _p_acerto(est["p_otima"], s) for s in SHOTS}
-    it_acerto = next((c["it"] for c in checkpoints if c["pacerto_1024"] >= LIMIAR_ACERTO), -1)
+    it_acerto = next((c["it"] for c in checkpoints if c["pacerto_16"] >= LIMIAR_P16), -1)
     rho = est["p_otima"] / est_u["p_otima"] if est_u["p_otima"] > 0 else float("nan")
+    # estado INICIAL (it = 0, antes do treino) e ganho do treino
+    cp0 = checkpoints[0] if checkpoints and checkpoints[0]["it"] == 0 else None
+    p_otima_ini = cp0["p_otima"] if cp0 else float("nan")
+    rho_ini = (p_otima_ini / est_u["p_otima"]
+               if cp0 and est_u["p_otima"] > 0 else float("nan"))
+    ok_rho2 = bool(rho >= LIMIAR_RHO)
+    ok_p16 = bool(pac[16] >= LIMIAR_P16)
+    ok_top = bool(est["top_otima"])
+    treino_ajudou = bool(rho > rho_ini) if not np.isnan(rho_ini) else False
+    ok_forte = bool(ok_rho2 and ok_top and treino_ajudou)
     hist = np.asarray(m.iterate_history, dtype=float)
     log.info(f"VQE: E_final={hist[-1]:.3f} E_min={hist.min():.3f} E0={e0:.3f} | decodificado: "
              f"custo={custo_dec} (C*={bf_custo:.4f}) igual={ok_custo} | rho={rho:.2f} "
@@ -520,6 +559,18 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
         pacerto_1024=pac[1024], it_acerto=it_acerto, params=len(theta0),
         avaliacoes=m.circuit_evaluations, tempo_bruteforce=t_bf, tempo_gs=t_gs,
         tempo_vqe=t_vqe)
+    resultados.update(
+        # estado fundamental exato (menor energia de H), decodificado
+        gs_custo_dec=gs_custo_dec, gs_ok_custo=int(gs_ok_custo), gs_rho=gs_rho,
+        gs_p_otima=est_gs["p_otima"], gs_p_ot_cond=est_gs["p_ot_cond"],
+        gs_p_valid=est_gs["p_valid"], gs_top_otima=int(est_gs["top_otima"]),
+        gs_pacerto_16=_p_acerto(est_gs["p_otima"], 16),
+        # VQE: estado inicial, solução mais provável e critérios
+        p_otima_inicial=p_otima_ini, rho_inicial=rho_ini,
+        ganho_rho=(rho - rho_ini) if not np.isnan(rho_ini) else float("nan"),
+        top_otima=int(ok_top), top_custo=est["top_custo"], top_massa=est["top_massa"],
+        ok_rho2=int(ok_rho2), ok_p16=int(ok_p16), treino_ajudou=int(treino_ajudou),
+        ok_forte=int(ok_forte))
     payload = dict(
         experimento=exp, status="OK",
         config=dict(C=C, V=V, L=L, cutoff=cutoff, max_iter=max_iter, lr=lr,
@@ -533,6 +584,10 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
                          n_viaveis=n_viaveis, tempo=t_bf),
         solucao_vqe=dict(rotas=(_rotas_com_deposito(rotas_dec, V) if rotas_dec else None),
                          custo=custo_dec, viavel=viavel, igual_ao_otimo=ok_custo),
+        fundamental_exato=dict(E0=e0, custo_decodificado=gs_custo_dec,
+                               igual_ao_otimo=gs_ok_custo, rho=gs_rho,
+                               p_otima=est_gs["p_otima"], p_valid=est_gs["p_valid"],
+                               solucao_mais_provavel_e_otima=est_gs["top_otima"]),
         resultados=resultados, checkpoints=checkpoints, artefatos=art)
     art["json"] = str(gm.get_file_path(f"{exp}.json", subdir="runs"))
     save_experiment_json(payload, art["json"])
@@ -572,17 +627,21 @@ def varredura_tese(tuplas, hiperparametros=None, pasta="vqe_tese", cutoff_base=N
 
 
 def resumo_tese(linhas):
-    print("\n" + "=" * 118)
-    print("RESUMO: custo decodificado == C* (viável)?   ok = igual   rho = P(ótima)/P(ótima uniforme)")
-    print("=" * 118)
-    print(f"{'exp':<22}{'C*':>9}{'custo_dec':>11}{'ok':>5}{'E0':>10}{'E_final':>10}"
-          f"{'rho':>8}{'P@16':>8}{'P@1024':>8}{'it_ac':>7}{'t_vqe':>9}")
+    print("\n" + "=" * 132)
+    print("RESUMO.  rho = P(ótima)/P(ótima uniforme).  ok = custo decodificado == C* (1024 disparos;")
+    print("satisfeito até pelo estado inicial nas instâncias pequenas).  forte = rho >= "
+          f"{LIMIAR_RHO:g} E solução mais provável é ótima E rho final > rho inicial.")
+    print("gs = estado fundamental exato (menor energia de H), decodificado.")
+    print("=" * 132)
+    print(f"{'exp':<24}{'C*':>8}{'E0':>9}{'E_fin':>9}{'ok':>4}{'rho_gs':>8}{'gs_top':>7}"
+          f"{'rho_ini':>8}{'rho_fin':>8}{'P@16':>7}{'top':>5}{'forte':>7}{'it_ac':>7}")
     for r in linhas:
         if r.get("status") != "OK":
-            print(f"{r['exp']:<22}  {r['status']}")
+            print(f"{r['exp']:<24}  {r['status']}")
             continue
-        print(f"{r['exp']:<22}{r['c_star']:>9.3f}{r['custo_dec']:>11.3f}"
-              f"{'sim' if r['ok_custo'] else 'nao':>5}{r['E0']:>10.2f}"
-              f"{r['E_vqe_final']:>10.2f}{r['rho']:>8.2f}{r['pacerto_16']:>8.3f}"
-              f"{r['pacerto_1024']:>8.3f}{r['it_acerto']:>7}"
-              f"{format_timespan(r['tempo_vqe']):>9}")
+        print(f"{r['exp']:<24}{r['c_star']:>8.3f}{r['E0']:>9.2f}{r['E_vqe_final']:>9.2f}"
+              f"{'sim' if r['ok_custo'] else 'nao':>4}{r['gs_rho']:>8.2f}"
+              f"{'sim' if r['gs_top_otima'] else 'nao':>7}{r['rho_inicial']:>8.2f}"
+              f"{r['rho']:>8.2f}{r['pacerto_16']:>7.3f}"
+              f"{'sim' if r['top_otima'] else 'nao':>5}"
+              f"{'sim' if r['ok_forte'] else 'nao':>7}{r['it_acerto']:>7}")
