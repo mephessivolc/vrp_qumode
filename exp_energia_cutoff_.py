@@ -256,6 +256,64 @@ def _figuras(gm, exp, ok, c_star, ajustes, metricas, C, V):
         plt.close(fig)
 
 
+def figura_comparativa(pasta, C, por_veiculos):
+    """TSP (V=1) x VRP (V>=2) com as MESMAS cidades (mesma semente do Graph).
+
+    Painel esquerdo: E0(d) de cada versão, com a reta do seu C*.
+    Painel direito: sobra RELATIVA (E0 - C*)/C* em log-log. Normalizar por C* deixa
+    comparar versões com custos ótimos diferentes: quanto mais íngreme a queda, mais
+    rápido a energia do fundamental se aproxima do ótimo quando o cutoff cresce.
+    Grava c{C}_tsp_vs_vrp_cutoff.png e comparacao_tsp_vrp.csv na pasta.
+    """
+    gm = gerenciador(pasta)
+    rot = lambda V: "TSP (V=1)" if V == 1 else f"VRP (V={V})"
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    print("\n" + "=" * 112)
+    print(f"COMPARAÇÃO TSP x VRP — {C} cidades fixas; só o cutoff varia")
+    print("=" * 112)
+    for i, (V, linhas) in enumerate(sorted(por_veiculos.items())):
+        ok = [r for r in linhas if r["status"] == "OK"]
+        if not ok:
+            continue
+        ds = np.array([r["cutoff"] for r in ok], dtype=float)
+        e0 = np.array([r["E0"] for r in ok])
+        c_star = float(ok[0]["c_star"])
+        cor = f"C{i}"
+        ax1.plot(ds, e0, "o-", color=cor, lw=1.6, label=f"{rot(V)}: $E_0(d)$")
+        ax1.axhline(c_star, ls="--", lw=1.0, color=cor, alpha=0.7,
+                    label=f"{rot(V)}: $C^*$ = {c_star:.2f}")
+        rel = (e0 - c_star) / c_star
+        pos = rel > 0
+        s = float("nan")
+        if pos.sum() >= 3:
+            s, _ = ajuste_potencia(ds[pos], rel[pos])
+        if pos.sum() >= 2:
+            lab = rot(V) + (f"  ($\\propto d^{{-{s:.2f}}}$)" if not math.isnan(s) else "")
+            ax2.loglog(ds[pos], rel[pos], "o-", color=cor, lw=1.4, label=lab)
+        print(f"  {rot(V):<10} C*={c_star:9.3f}   E0: {e0[0]:9.3f} (d={int(ds[0])}) -> "
+              f"{e0[-1]:9.3f} (d={int(ds[-1])})   sobra relativa: {rel[0]:.2f} -> {rel[-1]:.2f}"
+              f"   expoente s = {s:.3f}")
+        anexar_csv(caminho("comparacao_tsp_vrp.csv", pasta),
+                   dict(C=C, V=V, tipo=("TSP" if V == 1 else "VRP"), c_star=c_star,
+                        cutoff_min=int(ds[0]), cutoff_max=int(ds[-1]),
+                        E0_cutoff_min=float(e0[0]), E0_cutoff_max=float(e0[-1]),
+                        sobra_rel_cutoff_min=float(rel[0]), sobra_rel_cutoff_max=float(rel[-1]),
+                        expoente_sobra_relativa=s))
+    ax1.set_xlabel("Cutoff $d$")
+    ax1.set_ylabel("Menor energia de $H$")
+    ax1.set_title(f"Energia contra o cutoff — {C} cidades")
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=8, loc="best")
+    ax2.set_xlabel("Cutoff $d$")
+    ax2.set_ylabel("Sobra relativa $(E_0 - C^*)/C^*$")
+    ax2.set_title("Aproximação do ótimo: TSP x VRP")
+    ax2.grid(True, which="both", alpha=0.3)
+    ax2.legend(fontsize=8, loc="best")
+    fig.tight_layout()
+    fig.savefig(gm.get_file_path(f"c{C}_tsp_vs_vrp_cutoff.png", is_figure=True), dpi=300)
+    plt.close(fig)
+
+
 def resumo_energia_cutoff(linhas, metricas=None):
     if metricas:
         print("\n" + "=" * 112)

@@ -12,7 +12,7 @@ do path.py). Cada bloco usa a sua pasta (nomes em minúsculas):
 bloco                       pasta (dentro de qumodes/)       execuções
 vqe_ponte                   vqe_ponte                         gate do VQE
 tese_instancias             <pasta de cada bloco>             gate das tuplas (C, V, L)
-energia_cutoff              vqe_cutoff                        13 cutoffs por instância (C=5, V=2; d = 5, 7, ..., 29)
+energia_cutoff              vqe_cutoff                        C=5 fixo; V=1 (TSP) e V=2 (VRP); d = 5, 7, ..., 29 (13 cutoffs cada)
 v2_c3_grade                 vqe_tese_v2                       90 (C=3; V=1,2; L=1-3; 5 cutoffs x 3 lr)
 v2_c4                       vqe_tese_v2                       18 (C=4; V=1,2,3; L=1-3; lr 0,05 e 0,02)
 v2_c5                       vqe_tese_v2                       12 (C=5; V=1,2,3; L=1-2; lr 0,05 e 0,02)
@@ -68,7 +68,9 @@ HP_VARIANTES = {
 # (com R=4: d=21 ~ 7 GB, d=25 ~ 17 GB, d=29 ~ 36 GB).
 PASTA_ENERGIA = "vqe_cutoff"
 CUTOFFS_ENERGIA = tuple(range(5, 30, 2))
-INSTANCIAS_ENERGIA = [(5, 2)]          # lista de (C, V); cada uma gera tabela e figuras
+CIDADES_ENERGIA = 5                    # FIXO: o número de cidades não varia
+VEICULOS_ENERGIA = (1, 2)              # 1 = TSP;  2 = VRP (capacidade ativa)
+INSTANCIAS_ENERGIA = [(CIDADES_ENERGIA, V) for V in VEICULOS_ENERGIA]
 # "auto": 70% da memória EFETIVA, lida sem sudo (sistema.py: /proc/meminfo, cgroup e
 # SLURM; vale a menor). Um número fixa o limite em GB.
 MEMORIA_MAX_GB = "auto"
@@ -100,15 +102,17 @@ HP_CUTOFF = {
 
 EXECUTAR = {
     # --- resultados da tese (CVRP; instâncias do Graph; capacidade ativa) ----------
-    "vqe_ponte": True,                     # roda antes de qualquer VQE; se falhar, o VQE é pulado
-    "tese_instancias": True,               # confere viabilidade de cada tupla antes de rodar o VQE
-    # --- energia exata contra o cutoff (não usa o VQE nem a ponte) -------------------------
+    # ESTADO ATUAL: só o estudo de energia exata contra o cutoff está ligado.
+    # Cidades FIXAS em 5; varia apenas o cutoff; duas versões: V=1 (TSP) e V=2 (VRP).
     "informacao_sistema": True,            # memória e CPUs do servidor (sem sudo); vai para vqe_cutoff/sistema.txt
-    "energia_cutoff": True,                # C=5, V=2, cutoffs 5, 7, ..., 29 (pula os sem memória)
+    "energia_cutoff": True,                # C=5; V=1 (TSP) e V=2 (VRP); cutoffs 5, 7, ..., 29
+    # --- VQE (desligado; o estudo de energia NÃO usa VQE nem a ponte) ----------------------
+    "vqe_ponte": False,                    # roda antes de qualquer VQE; se falhar, o VQE é pulado
+    "tese_instancias": False,              # confere viabilidade de cada tupla antes de rodar o VQE
     # --- pasta vqe_tese_v2: critérios novos (ρ inicial/final, fundamental decodificado) ---
-    "v2_c3_grade": True,                   # C=3, V=1,2, L=1-3, cutoff (C+k) x lr  (90 execuções)
-    "v2_c4": True,                         # C=4, V=1,2,3, L=1-3, lr 0,05 e 0,02   (18 execuções)
-    "v2_c5": True,                         # C=5, V=1,2,3, L=1-2, lr 0,05 e 0,02   (12 execuções)
+    "v2_c3_grade": False,                  # C=3, V=1,2, L=1-3, cutoff (C+k) x lr  (90 execuções)
+    "v2_c4": False,                        # C=4, V=1,2,3, L=1-3, lr 0,05 e 0,02   (18 execuções)
+    "v2_c5": False,                        # C=5, V=1,2,3, L=1-2, lr 0,05 e 0,02   (12 execuções)
     # --- resultados anteriores (já analisados; pastas vqe_tese_base/hp/cutoff/c4) ---------
     "tese_base": False,
     "tese_hiperparametros": False,
@@ -225,12 +229,17 @@ def main():
         import exp_energia_cutoff as EC
 
         with saida("resultado_energia_cutoff.txt", PASTA_ENERGIA):
+            por_veiculos = {}
             for (C_e, V_e) in INSTANCIAS_ENERGIA:
                 linhas_e, metricas_e = EC.energia_vs_cutoff(
                     C=C_e, V=V_e, cutoffs=CUTOFFS_ENERGIA, pasta=PASTA_ENERGIA,
                     Q_val=Q_VAL, folga=FOLGA, memoria_max_gb=MEMORIA_MAX_GB)
-                print(f"\n##### instância C={C_e} V={V_e} #####")
+                print(f"\n##### instância C={C_e} V={V_e} "
+                      f"({'TSP' if V_e == 1 else 'VRP'}) #####")
                 EC.resumo_energia_cutoff(linhas_e, metricas_e)
+                por_veiculos[V_e] = linhas_e
+            if len(por_veiculos) > 1:
+                EC.figura_comparativa(PASTA_ENERGIA, CIDADES_ENERGIA, por_veiculos)
 
     if ponte_ok and EXECUTAR["vqe_pequeno"]:
         with saida("resultado_vqe.txt", "vqe_antigo"):
