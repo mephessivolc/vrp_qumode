@@ -51,13 +51,10 @@ import traceback
 
 import matplotlib.pyplot as plt
 import numpy as np
-import strawberryfields as sf
 
 import qumodes.hamiltonian as H
 import qumodes.hamiltonian_sparse as HS
 import qumodes.sf_bridge as SB
-from qumodes.ansatz import CircuitConfig
-from qumodes.solver import ProblemInstance, VQESolver
 
 from brute_force import BruteForce, InfeasibleProblemError
 from graphs import Graph
@@ -241,6 +238,7 @@ def _decodificar(dist, inst, D, req, cap, shots, seed):
 
 
 def _estado(solver, theta, cutoff):
+    import strawberryfields as sf            # só o VQE precisa do Strawberry Fields
     eng = sf.Engine("fock", backend_options={"cutoff_dim": cutoff})
     return eng.run(solver.ansatz.build_program(theta)).state
 
@@ -398,6 +396,8 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
                          folga=1.2, fd_eps=1e-2, theta_scale=0.05, checkpoint_cada=None,
                          n_checkpoints=20, shots_decodificacao=1024,
                          figura_decodificacao=True):
+    from qumodes.ansatz import CircuitConfig         # o VQE precisa do SF; as funções
+    from qumodes.solver import ProblemInstance, VQESolver   # auxiliares do módulo não
     exp = f"c{C}_v{V}_l{L}_{nome_hp}"
     checkpoint_cada = checkpoint_cada or max(1, max_iter // n_checkpoints)
     gm = gerenciador(pasta)

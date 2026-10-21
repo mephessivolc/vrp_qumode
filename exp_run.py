@@ -69,7 +69,9 @@ HP_VARIANTES = {
 PASTA_ENERGIA = "vqe_cutoff"
 CUTOFFS_ENERGIA = tuple(range(5, 30, 2))
 INSTANCIAS_ENERGIA = [(5, 2)]          # lista de (C, V); cada uma gera tabela e figuras
-MEMORIA_MAX_GB = 16.0
+# "auto": 70% da memória EFETIVA, lida sem sudo (sistema.py: /proc/meminfo, cgroup e
+# SLURM; vale a menor). Um número fixa o limite em GB.
+MEMORIA_MAX_GB = "auto"
 
 # ---- vqe_tese_v2: todos os resultados novos vão para UMA pasta -------------------
 PASTA_V2 = "vqe_tese_v2"
@@ -101,6 +103,7 @@ EXECUTAR = {
     "vqe_ponte": True,                     # roda antes de qualquer VQE; se falhar, o VQE é pulado
     "tese_instancias": True,               # confere viabilidade de cada tupla antes de rodar o VQE
     # --- energia exata contra o cutoff (não usa o VQE nem a ponte) -------------------------
+    "informacao_sistema": True,            # memória e CPUs do servidor (sem sudo); vai para vqe_cutoff/sistema.txt
     "energia_cutoff": True,                # C=5, V=2, cutoffs 5, 7, ..., 29 (pula os sem memória)
     # --- pasta vqe_tese_v2: critérios novos (ρ inicial/final, fundamental decodificado) ---
     "v2_c3_grade": True,                   # C=3, V=1,2, L=1-3, cutoff (C+k) x lr  (90 execuções)
@@ -212,6 +215,12 @@ def main():
     # ======================================================================
     # energia exata contra o cutoff (independe do VQE e da ponte)
     # ======================================================================
+    if EXECUTAR["informacao_sistema"]:
+        from sistema import relatorio_sistema
+
+        with saida("sistema.txt", PASTA_ENERGIA):
+            print(relatorio_sistema())
+
     if EXECUTAR["energia_cutoff"]:
         import exp_energia_cutoff as EC
 

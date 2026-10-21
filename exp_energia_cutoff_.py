@@ -102,6 +102,11 @@ def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutof
     gm = gerenciador(pasta)
     log = setup_logger(name=f"{exp}_energia_cutoff",
                        log_file=gm.get_file_path(f"logs/{exp}_energia_cutoff.log"))
+    if memoria_max_gb == "auto":
+        from sistema import memoria_gb, memoria_max_automatica
+        memoria_max_gb = memoria_max_automatica()
+        log.info(f"memória detectada: {memoria_gb()}  ->  limite automático "
+                 f"(70% da efetiva) = {memoria_max_gb:.1f} GB")
 
     # --- instância, força bruta, Hamiltoniano ------------------------------------
     g, D, demands, Q = montar_instancia(C, V, seed, Q_val, demand_range, folga)
