@@ -259,9 +259,15 @@ def ground_state_sparse(inst: H.VRPInstance, ops: H.ModularOperators,
                         require_all_vehicles: Optional[bool] = None,
                         k: int = 2, ncv: int = 48, tol: float = 1e-9,
                         maxiter: int = 5000, v0: Optional[np.ndarray] = None,
-                        seed: int = 0, force_sparse: bool = False
+                        seed: int = 0, force_sparse: bool = False,
+                        decode: bool = True
                         ) -> Dict[str, object]:
     """Fundamental de H sem matriz densa. Mesmo formato de H.ground_state.
+
+    decode=False calcula SÓ a energia (e residual/convergência): psi, distribution
+    e map vêm como None. A decodificação faz (M*R)^N contrações sobre o tensor d^N
+    e domina o custo em cutoff alto; para varrer E0 contra o cutoff ela é
+    desnecessária.
 
     Chaves extras: residual (||H psi - E psi||), converged, n_matvec.
     v0 padrão: vetor aleatório com semente fixa (não enviesa para a resposta).
@@ -297,6 +303,13 @@ def ground_state_sparse(inst: H.VRPInstance, ops: H.ModularOperators,
     vec = Vs[:, 0]
     vec = vec / np.linalg.norm(vec)
     residual = float(np.linalg.norm(Hop.matvec(vec) - w[0] * vec))
+
+    if not decode:
+        return {"eigenvalues": w[:max(k, 1)], "energy": float(w[0]),
+                "psi": None, "distribution": None, "map": None,
+                "gap": float(w[1] - w[0]) if w.size > 1 else float("nan"),
+                "residual": residual, "converged": converged,
+                "n_matvec": int(Hop.n_matvec)}
 
     psi = vec.reshape((d,) * N)
     dist = H.assignment_distribution(psi, inst, ops)

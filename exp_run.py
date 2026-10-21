@@ -12,6 +12,7 @@ do path.py). Cada bloco usa a sua pasta (nomes em minúsculas):
 bloco                       pasta (dentro de qumodes/)       execuções
 vqe_ponte                   vqe_ponte                         gate do VQE
 tese_instancias             <pasta de cada bloco>             gate das tuplas (C, V, L)
+energia_cutoff              vqe_cutoff                        13 cutoffs por instância (C=5, V=2; d = 5, 7, ..., 29)
 v2_c3_grade                 vqe_tese_v2                       90 (C=3; V=1,2; L=1-3; 5 cutoffs x 3 lr)
 v2_c4                       vqe_tese_v2                       18 (C=4; V=1,2,3; L=1-3; lr 0,05 e 0,02)
 v2_c5                       vqe_tese_v2                       12 (C=5; V=1,2,3; L=1-2; lr 0,05 e 0,02)
@@ -60,6 +61,16 @@ HP_VARIANTES = {
     "lr10": dict(max_iter=500, lr=0.10, lr_final=0.010, cutoff_extra=0),
 }
 
+# ---- energia exata contra o cutoff (hipótese dos pesquisadores) --------------------
+# Menor energia de H (diagonalização exata sem matriz densa) para C=5, V=2 em
+# cutoffs de 5 a 29, de 2 em 2. LIMITE É A MEMÓRIA: o script estima o uso antes de
+# cada cutoff e PULA os que passarem de MEMORIA_MAX_GB. Ajuste ao RAM disponível
+# (com R=4: d=21 ~ 7 GB, d=25 ~ 17 GB, d=29 ~ 36 GB).
+PASTA_ENERGIA = "vqe_cutoff"
+CUTOFFS_ENERGIA = tuple(range(5, 30, 2))
+INSTANCIAS_ENERGIA = [(5, 2)]          # lista de (C, V); cada uma gera tabela e figuras
+MEMORIA_MAX_GB = 16.0
+
 # ---- vqe_tese_v2: todos os resultados novos vão para UMA pasta -------------------
 PASTA_V2 = "vqe_tese_v2"
 
@@ -89,6 +100,8 @@ EXECUTAR = {
     # --- resultados da tese (CVRP; instâncias do Graph; capacidade ativa) ----------
     "vqe_ponte": True,                     # roda antes de qualquer VQE; se falhar, o VQE é pulado
     "tese_instancias": True,               # confere viabilidade de cada tupla antes de rodar o VQE
+    # --- energia exata contra o cutoff (não usa o VQE nem a ponte) -------------------------
+    "energia_cutoff": True,                # C=5, V=2, cutoffs 5, 7, ..., 29 (pula os sem memória)
     # --- pasta vqe_tese_v2: critérios novos (ρ inicial/final, fundamental decodificado) ---
     "v2_c3_grade": True,                   # C=3, V=1,2, L=1-3, cutoff (C+k) x lr  (90 execuções)
     "v2_c4": True,                         # C=4, V=1,2,3, L=1-3, lr 0,05 e 0,02   (18 execuções)
@@ -196,6 +209,20 @@ def main():
     # ======================================================================
     # diagnósticos anteriores (desligados)
     # ======================================================================
+    # ======================================================================
+    # energia exata contra o cutoff (independe do VQE e da ponte)
+    # ======================================================================
+    if EXECUTAR["energia_cutoff"]:
+        import exp_energia_cutoff as EC
+
+        with saida("resultado_energia_cutoff.txt", PASTA_ENERGIA):
+            for (C_e, V_e) in INSTANCIAS_ENERGIA:
+                linhas_e, metricas_e = EC.energia_vs_cutoff(
+                    C=C_e, V=V_e, cutoffs=CUTOFFS_ENERGIA, pasta=PASTA_ENERGIA,
+                    Q_val=Q_VAL, folga=FOLGA, memoria_max_gb=MEMORIA_MAX_GB)
+                print(f"\n##### instância C={C_e} V={V_e} #####")
+                EC.resumo_energia_cutoff(linhas_e, metricas_e)
+
     if ponte_ok and EXECUTAR["vqe_pequeno"]:
         with saida("resultado_vqe.txt", "vqe_antigo"):
             EV.vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100,
