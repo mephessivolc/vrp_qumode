@@ -96,8 +96,13 @@ def main(
         vehicles=[1, 2, 3],
         from_csv="cutoff_minimo.csv",
         default_cutoff=8,
-        out="recursos.csv"):
+        out=None,
+        pasta="recursos",
+        pasta_entrada="cutoff_minimo"):
 
+    from saidas import resolver           # entrada e saída pelo PathManager
+    from_csv = resolver(from_csv, pasta_entrada) if from_csv else None
+    out = resolver(out, pasta, "recursos.csv")
     dmin = load_dmin(from_csv) if from_csv else {}
 
     print("=" * 104)

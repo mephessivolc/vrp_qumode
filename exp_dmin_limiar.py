@@ -113,10 +113,12 @@ def parse_specs(tokens):
 
 
 def main(path="cutoff_minimo_trace.csv", specs=DEFAULT_SPECS, need_top=True,
-         confirm=2):
+         confirm=2, pasta="cutoff_minimo"):
+    from saidas import resolver           # entrada e saída pelo PathManager
+    path = resolver(path, pasta)
     series = load(path)
     base = os.path.splitext(os.path.basename(path))[0]
-    out_path = f"result_{base}.txt"
+    out_path = resolver(f"result_{base}.txt", pasta)
     with open(out_path, "w", encoding="utf-8") as f:
         if not series:
             msg = "Nenhuma linha com p_valid no trace: rode a v3 de exp_cutoff_minimo.py."

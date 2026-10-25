@@ -61,7 +61,9 @@ FIELDS = ["seed", "lambda_gap", "d", "dim", "c_star", "custo_top", "E0",
 
 def run(C=4, V=2, seeds=(42, 1, 3), cutoffs=(12, 16),
         gaps=(20.0, 40.0, 70.0, None), dense_limit=700, max_dim=70_000,
-        out="scan_gap.csv"):
+        out=None, pasta="diagnosticos"):
+    from saidas import resolver           # todo resultado passa pelo PathManager
+    out = resolver(out, pasta, "scan_gap.csv")
     print(f"C={C} V={V}  seeds={seeds}  cutoffs={cutoffs}  "
           f"lambda_gap={['sugerido' if g is None else g for g in gaps]}")
     print(f"{'sem':>4}{'lgap':>7}{'d':>4}{'C*':>5}{'custo_top':>10}{'E0':>10}"

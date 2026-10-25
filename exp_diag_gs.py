@@ -88,7 +88,9 @@ def make_params(inst, V, pen, lam_exc):
 
 def run(C=4, V=1, cutoffs=(5, 6, 8, 10), penalties=("base", "sugerida"),
         lam_excs=(0.0, 0.005), dense_limit=700, max_dim=60_000,
-        out="diag_gs.csv", seed=42):
+        out=None, seed=42, pasta="diagnosticos"):
+    from saidas import resolver           # todo resultado passa pelo PathManager
+    out = resolver(out, pasta, "diag_gs.csv")
     inst = build_instance(C, V, seed)
     cstar, optset = classical_optima(inst, V > 1)
     print(f"C={C} V={V}  R={inst.R}  C*={cstar}  rotas ótimas={len(optset)}")

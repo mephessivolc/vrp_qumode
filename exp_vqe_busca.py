@@ -202,7 +202,9 @@ def vqe_busca_otima(C=3, V=2, seed=42, cutoff=8, layers=2, theta_seed=0,
 def varredura_vqe(cidades=(3,), veiculos=(1, 2), camadas=(1, 2, 3),
                   cutoffs=None, seeds_instancia=(42,), seeds_theta=(0, 1),
                   maxiter=100, lr=0.05, lr_final=0.005,
-                  csv_path="vqe_varredura.csv", **kw):
+                  csv_path=None, pasta="vqe_antigo", **kw):
+    from saidas import resolver           # todo resultado passa pelo PathManager
+    csv_path = resolver(csv_path, pasta, "vqe_varredura.csv")
     cutoffs = cutoffs or {3: 8, 4: 10}
     linhas = []
     for C in cidades:

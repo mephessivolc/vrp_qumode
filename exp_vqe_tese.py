@@ -539,7 +539,7 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
     exp = f"c{C}_v{V}_l{L}_{nome_hp}"
     checkpoint_cada = checkpoint_cada or max(1, max_iter // n_checkpoints)
     gm = gerenciador(pasta)
-    log = setup_logger(name=exp, log_file=gm.get_file_path(f"logs/{exp}.log"))
+    log = setup_logger(name=exp, log_file=gm.get_file_path(f"{exp}.log", subdir="logs"))
     log.info(f"=== {exp}: C={C} V={V} L={L} cutoff={cutoff} it={max_iter} lr={lr}->{lr_final} ===")
     t_total = time.time()
     req, cap = V > 1, V > 1

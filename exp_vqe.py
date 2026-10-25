@@ -109,9 +109,11 @@ def _estatisticas(psi, inst, ops, par, optset, req):
 
 def vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100, lr=0.05,
                  lr_final=0.005, fd_eps=1e-2, init="vacuo", theta_scale=0.05,
-                 theta_seed=None, csv_path="vqe_resultados_v2.csv", tag=None):
+                 theta_seed=None, csv_path=None, tag=None, pasta="vqe_antigo"):
     """init: 'vacuo' (o ansatz parte do vácuo) ou 'nos' (um ket de nó por cidade,
     em nós distintos: warm start que NÃO conhece qual configuração é a ótima)."""
+    from saidas import resolver           # todo resultado passa pelo PathManager
+    csv_path = resolver(csv_path, pasta, "vqe_resultados_v2.csv")
     inst = build_instance(C, V, seed)
     cstar, optset = classical_optima(inst, V > 1)
     par = make_params(inst, V, "sugerida", 0.0, "soma")
@@ -174,7 +176,7 @@ def vqe_vs_exato(C=3, V=2, seed=42, cutoff=8, layers=2, maxiter=100, lr=0.05,
     print(f"\nE_vqe - E0 = {est_vq['E'] - est_gs['E']:.4f}   "
           f"fidelidade |<GS|VQE>|^2 = {fid:.4f}   rota decodificada: {m.best_routes}")
 
-    destino_it = os.path.join(os.path.dirname(csv_path) or ".", f"vqe_iterados_{tag}.csv")
+    destino_it = resolver(f"vqe_iterados_{tag}.csv", pasta, subdir="arrays")
     with open(destino_it, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["iteracao", "energia"])

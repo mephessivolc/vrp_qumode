@@ -456,9 +456,13 @@ def main(cities=(3, 4, 5),
          lift_min=2.0,           # limiar: P(ótima|válida) >= lift_min * acaso
          seed=42,                # semente da instância (distâncias aleatórias)
          gap_form="soma",        # "soma" (atual) | "predecessor" (ver hamiltonian.py)
-         out="cutoff_minimo.csv",
-         trace_out="cutoff_minimo_trace.csv"):
+         out=None,
+         trace_out=None,
+         pasta="cutoff_minimo"):
 
+    from saidas import resolver           # todo resultado passa pelo PathManager
+    out = resolver(out, pasta, "cutoff_minimo.csv")
+    trace_out = resolver(trace_out, pasta, "cutoff_minimo_trace.csv")
     rows, trace = [], []
     for C in cities:
         for V in vehicles:
