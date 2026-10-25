@@ -264,8 +264,8 @@ def ground_state_sparse(inst: H.VRPInstance, ops: H.ModularOperators,
                         ) -> Dict[str, object]:
     """Fundamental de H sem matriz densa. Mesmo formato de H.ground_state.
 
-    decode=False calcula SÓ a energia (e residual/convergência): psi, distribution
-    e map vêm como None. A decodificação faz (M*R)^N contrações sobre o tensor d^N
+    decode=False NÃO calcula a distribuição completa do POVM: distribution e map vêm
+    como None; energia, residual, convergência e psi (o vetor) são devolvidos. A decodificação faz (M*R)^N contrações sobre o tensor d^N
     e domina o custo em cutoff alto; para varrer E0 contra o cutoff ela é
     desnecessária.
 
@@ -306,7 +306,7 @@ def ground_state_sparse(inst: H.VRPInstance, ops: H.ModularOperators,
 
     if not decode:
         return {"eigenvalues": w[:max(k, 1)], "energy": float(w[0]),
-                "psi": None, "distribution": None, "map": None,
+                "psi": vec.reshape((d,) * N), "distribution": None, "map": None,
                 "gap": float(w[1] - w[0]) if w.size > 1 else float("nan"),
                 "residual": residual, "converged": converged,
                 "n_matvec": int(Hop.n_matvec)}

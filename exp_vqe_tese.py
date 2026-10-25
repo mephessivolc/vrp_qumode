@@ -277,6 +277,13 @@ def distribuicao_valida(psi, inst, ops, cfgs):
     """p(cfg) = <psi| prod_i A_{v_i, r_i}^{(i)} |psi> para cada cfg válida,
     normalizada pela massa TOTAL do POVM, <psi| (sum_k A_k)^{(x)N} |psi> (a mesma
     normalização de H.assignment_distribution)."""
+    if psi is None or np.size(psi) != ops.cutoff ** inst.N:
+        raise ValueError(
+            "distribuicao_valida: o vetor do estado não veio (psi ausente ou com "
+            f"tamanho {np.size(psi) if psi is not None else 0}, esperado "
+            f"{ops.cutoff}^{inst.N} = {ops.cutoff ** inst.N}). Provável causa: "
+            "qumodes/hamiltonian_sparse.py desatualizado — a versão atual devolve "
+            "psi em ground_state_sparse(..., decode=False).")
     psi = np.asarray(psi, dtype=np.complex128).reshape((ops.cutoff,) * inst.N)
     psi = psi / np.linalg.norm(psi)
     bk = H._NumpyBackend()
