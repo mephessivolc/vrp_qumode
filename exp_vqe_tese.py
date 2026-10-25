@@ -110,11 +110,54 @@ def capacidade_por_demanda(demands, V, folga=1.2):
     return q
 
 
+def capacidade_desigual(demands, V, folga=1.2, seed=42):
+    """Capacidades DIFERENTES por veículo, com pelo menos uma solução garantida.
+
+    Construção: sorteia uma partição de referência das cidades em V rotas NÃO
+    vazias (cidades embaralhadas, cortadas em V - 1 pontos distintos, então os
+    tamanhos também variam) e dá a cada veículo v a capacidade
+        Q_v = ceil(folga * carga de v na partição),   folga >= 1.
+    A partição de referência respeita todas as capacidades, então a instância é
+    viável por construção. Ela também cabe na codificação: cada rota tem no máximo
+    C - V + 1 cidades e no máximo max(Q)/menor demanda cidades, os dois limites de R.
+    A soma das capacidades acompanha a demanda total (com a folga), então a
+    restrição continua ativa; folga perto de 1 deixa as capacidades apertadas.
+    Para V = 1 (TSP) a capacidade não é usada e vale 1.
+    O sorteio depende só de (seed, C, V): a mesma instância sempre recebe as
+    mesmas capacidades."""
+    if folga < 1.0:
+        raise ValueError("folga deve ser >= 1 para a partição de referência ser viável")
+    d = [float(x) for x in demands]
+    n = len(d)
+    if V == 1 or sum(d) <= 0:
+        return [1.0] * V
+    if V > n:
+        raise InfeasibleProblemError(f"V = {V} veículos para {n} cidades: algum ficaria vazio")
+    rng = np.random.default_rng((int(seed), n, int(V)))
+    ordem = rng.permutation(n)
+    cortes = np.sort(rng.choice(np.arange(1, n), size=V - 1, replace=False))
+    grupos = np.split(ordem, cortes)
+    return [float(math.ceil(folga * sum(d[i] for i in g) - 1e-9)) for g in grupos]
+
+
+def _q_texto(Q):
+    """Capacidade para tabelas: '8' se todas iguais; '5/9/4' se diferentes."""
+    q = [float(x) for x in np.asarray(Q).reshape(-1)]
+    if all(abs(x - q[0]) < 1e-9 for x in q):
+        return f"{q[0]:g}"
+    return "/".join(f"{x:g}" for x in q)
+
+
 def montar_instancia(C, V, seed=42, Q_val="auto", demand_range=(1, 5), folga=1.2):
-    """Q_val = "auto" (padrão): capacidade construída da demanda total (ver
-    capacidade_por_demanda); número: capacidade fixa por veículo."""
+    """Q_val = "auto" (padrão): capacidade IGUAL para todos, construída da demanda
+    total (ver capacidade_por_demanda); "desigual": capacidade DIFERENTE por
+    veículo, com solução garantida (ver capacidade_desigual); número: capacidade
+    fixa igual para todos."""
     g = Graph(C=C, V=V, is_warm_start=False, demand_range=demand_range, seed=seed)
     D, demands, _ = g.graph
+    if Q_val == "desigual":
+        Q = np.asarray(capacidade_desigual(demands, V, folga, seed), dtype=np.float64)
+        return g, D, demands, Q
     if Q_val is None or Q_val == "auto":
         q = capacidade_por_demanda(demands, V, folga)
     else:
@@ -142,9 +185,12 @@ def _canon(rotas):
 
 def enumerar_solucoes(D, V, demands, Q, tol=1e-9):
     """(custo ótimo, conjunto de soluções ótimas canônicas, nº de soluções viáveis
-    canônicas). A solução é o conjunto de rotas (rótulos de veículo ignorados,
-    pois as capacidades são iguais); o sentido de cada rota conta como solução
-    distinta, como no POVM."""
+    canônicas). A solução é o conjunto de rotas (rótulos de veículo ignorados); o
+    sentido de cada rota conta como solução distinta, como no POVM. Com capacidades
+    DIFERENTES por veículo, um conjunto de rotas é viável se ALGUMA atribuição de
+    rotas a veículos respeita as capacidades: a enumeração percorre todas as
+    atribuições rotuladas (a ordem das rotas na permutação é a ordem dos veículos),
+    então isso já está coberto."""
     C = D.shape[0] - 1
     custos = {}
     for perm in itertools.permutations(range(1, C + 1)):
@@ -183,9 +229,78 @@ def _hamiltoniano(C, V, D, demands, Q):
 # ---------------------------------------------------------------------------
 # estatísticas do estado e decodificação
 # ---------------------------------------------------------------------------
-def _distribuicao(ket, inst, ops):
+class DistValida:
+    """Probabilidades do POVM SÓ nas configurações VÁLIDAS (cfgs: n x N slots, com
+    slot = v*R + r). O que falta para 1 é a massa das inválidas. Basta para
+    P(válida), P(ótima), solução mais provável e decodificação por disparos, sem
+    percorrer as (M*R)^N configurações (com 6 cidades e 5 veículos: 3.600 válidas
+    contra 10^6 no total)."""
+
+    def __init__(self, cfgs, probs):
+        self.cfgs = np.asarray(cfgs, dtype=np.int64).reshape(len(probs), -1)
+        self.probs = np.clip(np.asarray(probs, dtype=np.float64), 0.0, None)
+
+
+def _composicoes(n, m, lo, hi):
+    """Tuplas de m tamanhos de rota, cada um em [lo, hi], somando n."""
+    if m == 1:
+        if lo <= n <= hi:
+            yield (n,)
+        return
+    for k in range(lo, min(hi, n) + 1):
+        for resto in _composicoes(n - k, m - 1, lo, hi):
+            yield (k,) + resto
+
+
+def configuracoes_validas(inst, req, cap):
+    """Todas as configurações válidas, por construção: uma permutação das cidades
+    cortada em rotas consecutivas (veículo 0, 1, ...), cada rota ocupando as
+    posições 0..k-1 do seu veículo. Bijeção com as atribuições válidas; a checagem
+    de capacidade usa a mesma regra de sf_bridge.is_valid_assignment."""
+    N, M, R = inst.N, inst.M, inst.R
+    lo = 1 if req else 0
+    cfgs = []
+    for tam in _composicoes(N, M, lo, R):
+        for perm in itertools.permutations(range(N)):
+            slots = [0] * N
+            k = 0
+            for v, t in enumerate(tam):
+                for pos in range(t):
+                    slots[perm[k]] = v * R + pos
+                    k += 1
+            if SB.is_valid_assignment(slots, inst, req, cap):
+                cfgs.append(tuple(slots))
+    return cfgs
+
+
+def distribuicao_valida(psi, inst, ops, cfgs):
+    """p(cfg) = <psi| prod_i A_{v_i, r_i}^{(i)} |psi> para cada cfg válida,
+    normalizada pela massa TOTAL do POVM, <psi| (sum_k A_k)^{(x)N} |psi> (a mesma
+    normalização de H.assignment_distribution)."""
+    psi = np.asarray(psi, dtype=np.complex128).reshape((ops.cutoff,) * inst.N)
+    psi = psi / np.linalg.norm(psi)
+    bk = H._NumpyBackend()
+    R = inst.R
+    S = sum(ops.A[v, r] for v in range(inst.M) for r in range(R))
+    phi = psi
+    for i in range(inst.N):
+        phi = bk.apply_local(phi, S, i)
+    total = max(bk.inner_real(psi, phi), 1e-300)
+    probs = np.empty(len(cfgs), dtype=np.float64)
+    for j, slots in enumerate(cfgs):
+        phi = psi
+        for i, s in enumerate(slots):
+            v, r = divmod(int(s), R)
+            phi = bk.apply_local(phi, ops.A[v, r], i)
+        probs[j] = max(0.0, bk.inner_real(psi, phi)) / total
+    return DistValida(cfgs, probs)
+
+
+def _distribuicao(ket, inst, ops, cfgs=None):
     psi = np.asarray(ket, dtype=np.complex128).reshape((ops.cutoff,) * inst.N)
     psi = psi / np.linalg.norm(psi)
+    if cfgs is not None:
+        return distribuicao_valida(psi, inst, ops, cfgs)
     return np.asarray(H.assignment_distribution(psi, inst, ops), dtype=np.float64)
 
 
@@ -193,16 +308,21 @@ def _estatisticas(dist, inst, D, optset, req, cap):
     """Massa do POVM por SOLUÇÃO viável (conjunto de rotas; vários arranjos de
     posição/veículo da mesma solução somam). Devolve P(válida), P(ótima), a
     solução MAIS PROVÁVEL e se ela é ótima, e o custo médio entre as válidas."""
-    flat = np.clip(dist.reshape(-1), 0.0, None)
-    flat = flat / flat.sum()
+    if isinstance(dist, DistValida):              # já são só as válidas
+        pares = [(c, float(p)) for c, p in zip(dist.cfgs, dist.probs) if p > 1e-15]
+    else:
+        flat = np.clip(dist.reshape(-1), 0.0, None)
+        flat = flat / flat.sum()
+        pares = []
+        for f in np.flatnonzero(flat > 1e-12):
+            slots = np.unravel_index(int(f), dist.shape)
+            if SB.is_valid_assignment(slots, inst, req, cap):
+                pares.append((slots, float(flat[f])))
     massas, custos = {}, {}
-    for f in np.flatnonzero(flat > 1e-12):
-        slots = np.unravel_index(int(f), dist.shape)
-        if not SB.is_valid_assignment(slots, inst, req, cap):
-            continue
+    for slots, w in pares:
         rotas = SB.routes_from_slots(slots, inst)
         k = _canon(rotas)
-        massas[k] = massas.get(k, 0.0) + float(flat[f])
+        massas[k] = massas.get(k, 0.0) + w
         if k not in custos:
             custos[k] = _custo_rotas(D, rotas)
     p_valid = sum(massas.values())
@@ -222,10 +342,23 @@ def _estatisticas(dist, inst, D, optset, req, cap):
 def _decodificar(dist, inst, D, req, cap, shots, seed):
     """Rota viável de menor custo entre `shots` configurações sorteadas; None se
     nenhuma sorteada for viável."""
-    flat = np.clip(dist.reshape(-1), 0.0, None)
-    flat = flat / flat.sum()
     rng = np.random.default_rng(seed)
     melhor = None
+    if isinstance(dist, DistValida):
+        # categorias = configurações válidas + uma categoria "qualquer inválida"
+        p = dist.probs
+        pp = np.append(p, max(0.0, 1.0 - float(p.sum())))
+        pp = pp / pp.sum()
+        for j in np.unique(rng.choice(pp.size, size=int(shots), p=pp)):
+            if j == p.size:                        # disparo caiu numa inválida
+                continue
+            rotas = SB.routes_from_slots(dist.cfgs[j], inst)
+            custo = _custo_rotas(D, rotas)
+            if melhor is None or custo < melhor[0] - 1e-12:
+                melhor = (custo, rotas)
+        return melhor
+    flat = np.clip(dist.reshape(-1), 0.0, None)
+    flat = flat / flat.sum()
     for f in np.unique(rng.choice(flat.size, size=int(shots), p=flat)):
         slots = np.unravel_index(int(f), dist.shape)
         if not SB.is_valid_assignment(slots, inst, req, cap):
@@ -352,10 +485,15 @@ def verificar_instancias(tuplas, pasta="vqe_tese", seed=42, Q_val="auto",
     demandas e a confirmação do custo ótimo contra o BruteForce. Devolve a lista
     de tuplas viáveis."""
     print("=" * 100)
-    print(f"INSTÂNCIAS  (semente {seed}, demandas em {demand_range}, capacidade "
-          f"{'construída da demanda (folga ' + str(folga) + ')' if Q_val in (None, 'auto') else Q_val})")
+    if Q_val in (None, "auto"):
+        descr_q = f"igual entre veículos, construída da demanda (folga {folga})"
+    elif Q_val == "desigual":
+        descr_q = f"DIFERENTE por veículo, com solução garantida (folga {folga})"
+    else:
+        descr_q = str(Q_val)
+    print(f"INSTÂNCIAS  (semente {seed}, demandas em {demand_range}, capacidade {descr_q})")
     print("=" * 100)
-    print(f"{'C':>3}{'V':>3}{'R':>3}{'Q':>5}{'C*':>10}{'BF':>10}{'#ótimas':>9}{'#viáveis':>10}"
+    print(f"{'C':>3}{'V':>3}{'R':>3}{'Q':>12}{'C*':>10}{'BF':>10}{'#ótimas':>9}{'#viáveis':>10}"
           f"  demandas / situação")
     ok = []
     vistos = {}
@@ -373,9 +511,9 @@ def verificar_instancias(tuplas, pasta="vqe_tese", seed=42, Q_val="auto",
                 vistos[(C, V)] = (situacao == "OK")
                 linha = dict(C=C, V=V, R=inst.R, c_star=custo, c_star_bruteforce=bf_custo,
                              n_otimas=len(otimas), n_viaveis=n_viaveis,
-                             demandas=[float(x) for x in demands], Q=float(Q[0]),
+                             demandas=[float(x) for x in demands], Q=_q_texto(Q),
                              situacao=situacao)
-                print(f"{C:>3}{V:>3}{inst.R:>3}{float(Q[0]):>5.0f}{custo:>10.3f}{bf_custo:>10.3f}"
+                print(f"{C:>3}{V:>3}{inst.R:>3}{_q_texto(Q):>12}{custo:>10.3f}{bf_custo:>10.3f}"
                       f"{len(otimas):>9}{n_viaveis:>10}  {list(demands)}  {situacao}")
             except InfeasibleProblemError as err:
                 vistos[(C, V)] = False
@@ -395,7 +533,7 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
                          pasta="vqe_tese", seed=42, Q_val="auto", demand_range=(1, 5),
                          folga=1.2, fd_eps=1e-2, theta_scale=0.05, checkpoint_cada=None,
                          n_checkpoints=20, shots_decodificacao=1024,
-                         figura_decodificacao=True):
+                         figura_decodificacao=True, decodificacao="valida"):
     from qumodes.ansatz import CircuitConfig         # o VQE precisa do SF; as funções
     from qumodes.solver import ProblemInstance, VQESolver   # auxiliares do módulo não
     exp = f"c{C}_v{V}_l{L}_{nome_hp}"
@@ -412,8 +550,8 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
 
     # 1. instância e força bruta ---------------------------------------------
     g, D, demands, Q = montar_instancia(C, V, seed, Q_val, demand_range, folga)
-    linha["Q"] = float(Q[0])
-    log.info(f"capacidade por veículo Q={Q[0]:g}  demandas={list(demands)}")
+    linha["Q"] = _q_texto(Q)
+    log.info(f"capacidade por veículo Q={_q_texto(Q)}  demandas={list(demands)}")
     art["fig_original_graph"] = str(gm.get_file_path(f"{exp}_original_graph.png", is_figure=True))
     g.plot_original_graph(art["fig_original_graph"])
     t0 = time.time()
@@ -438,15 +576,25 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
     # 2. Hamiltoniano, referência exata e linha de base uniforme ---------------
     inst, par = _hamiltoniano(C, V, D, demands, Q)
     ops = H.build_modular_operators(cutoff, inst.M, inst.R, HBAR)
+    cfgs = configuracoes_validas(inst, req, cap) if decodificacao == "valida" else None
     t0 = time.time()
-    gs = HS.ground_state_sparse(inst, ops, par)
+    gs = HS.ground_state_sparse(inst, ops, par, decode=(cfgs is None))
     e0 = float(gs["energy"])
     t_gs = time.time() - t0
     X = inst.M * inst.R
-    dist_u = np.full((X,) * C, 1.0 / float(X) ** C)
+    if cfgs is not None:
+        log.info(f"decodificação só nas {len(cfgs)} configurações válidas "
+                 f"(de {X}^{C} = {X ** C:,}); nós por modo = {X}, cutoff = {cutoff}"
+                 f"{' (cutoff MENOR que o nº de nós)' if cutoff < X else ''}")
+        dist_u = DistValida(cfgs, np.full(len(cfgs), 1.0 / float(X) ** C))
+    else:
+        dist_u = np.full((X,) * C, 1.0 / float(X) ** C)
     est_u = _estatisticas(dist_u, inst, D, optset, req, cap)
     # solução decodificada do ESTADO FUNDAMENTAL exato (menor energia de H)
-    dist_gs = np.asarray(gs["distribution"], dtype=np.float64)
+    if cfgs is not None:
+        dist_gs = distribuicao_valida(gs["psi"], inst, ops, cfgs)
+    else:
+        dist_gs = np.asarray(gs["distribution"], dtype=np.float64)
     est_gs = _estatisticas(dist_gs, inst, D, optset, req, cap)
     dec_gs = _decodificar(dist_gs, inst, D, req, cap, shots_decodificacao, seed)
     gs_custo_dec = dec_gs[0] if dec_gs is not None else float("nan")
@@ -469,7 +617,7 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
     def cb(t, theta, energia):
         if t % checkpoint_cada != 0 and t != max_iter:
             return
-        dist = _distribuicao(_estado(solver, theta, cutoff).ket(), inst, ops)
+        dist = _distribuicao(_estado(solver, theta, cutoff).ket(), inst, ops, cfgs)
         est = _estatisticas(dist, inst, D, optset, req, cap)
         dec = _decodificar(dist, inst, D, req, cap, shots_decodificacao, seed)
         cp = dict(it=t, energia=energia, p_valid=est["p_valid"], p_otima=est["p_otima"],
@@ -493,7 +641,7 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
         return linha
 
     # 4. estado final, decodificação e métricas --------------------------------
-    dist = _distribuicao(_estado(solver, m.optimal_theta, cutoff).ket(), inst, ops)
+    dist = _distribuicao(_estado(solver, m.optimal_theta, cutoff).ket(), inst, ops, cfgs)
     est = _estatisticas(dist, inst, D, optset, req, cap)
     dec = _decodificar(dist, inst, D, req, cap, shots_decodificacao, seed)
     if dec is None:
@@ -545,7 +693,9 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
         cp_p_valid=np.array([c["p_valid"] for c in checkpoints]),
         cp_p_otima=np.array([c["p_otima"] for c in checkpoints]),
         cp_custo_dec=np.array([c["custo_dec"] for c in checkpoints]),
-        dist_final=dist, coords=g.graph.coords, D=D, demands=demands, Q=Q)
+        **(dict(dist_final=dist) if isinstance(dist, np.ndarray)
+           else dict(cfgs_validas=dist.cfgs, p_validas=dist.probs)),
+        coords=g.graph.coords, D=D, demands=demands, Q=Q)
 
     resultados = dict(
         c_star=bf_custo, n_otimas=len(optset), n_viaveis=n_viaveis, E0=e0,
@@ -570,7 +720,11 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
         ganho_rho=(rho - rho_ini) if not np.isnan(rho_ini) else float("nan"),
         top_otima=int(ok_top), top_custo=est["top_custo"], top_massa=est["top_massa"],
         ok_rho2=int(ok_rho2), ok_p16=int(ok_p16), treino_ajudou=int(treino_ajudou),
-        ok_forte=int(ok_forte))
+        ok_forte=int(ok_forte),
+        # codificação: o vetor é "igualmente válido e ótimo" mesmo com cutoff < nós?
+        decodificacao=decodificacao, n_cfg_validas=(len(cfgs) if cfgs is not None else -1),
+        nos_por_modo=X, cutoff_abaixo_dos_nos=int(cutoff < X),
+        valido_e_otimo=int(bool(viavel) and abs(custo_dec - bf_custo) < 1e-9))
     payload = dict(
         experimento=exp, status="OK",
         config=dict(C=C, V=V, L=L, cutoff=cutoff, max_iter=max_iter, lr=lr,
@@ -605,21 +759,35 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
 # varredura
 # ---------------------------------------------------------------------------
 def varredura_tese(tuplas, hiperparametros=None, pasta="vqe_tese", cutoff_base=None,
-                   **kw):
+                   dim_max=None, **kw):
     """tuplas: lista de (C, V, L). hiperparametros: {nome: dict(max_iter, lr,
     lr_final, e UMA das chaves de cutoff)}:
+        cutoff_CxV     cutoff = C * V   (nº de cidades x nº de veículos)
         cutoff_rel_C   cutoff = C + k   (k = 0: cutoff igual ao nº de cidades)
         cutoff_extra   cutoff = cutoff base de C + k   (padrão: 0)
+    dim_max: se cutoff**C (dimensão do espaço de Fock) passar disso, a tupla é PULADA
+    e registrada no summary.csv com status PULADO_DIMENSAO (a simulação, a energia
+    exata e a decodificação crescem com cutoff**C).
     O nome do conjunto entra nos nomes dos arquivos: use letras, dígitos e '_'."""
     hiperparametros = hiperparametros or HIPERPARAMETROS_BASE
     cutoff_base = cutoff_base or CUTOFF_BASE
     linhas = []
     for (C, V, L) in tuplas:
         for nome, hp in hiperparametros.items():
-            if "cutoff_rel_C" in hp:
+            if hp.get("cutoff_CxV"):
+                cutoff = C * V
+            elif "cutoff_rel_C" in hp:
                 cutoff = C + int(hp["cutoff_rel_C"])
             else:
                 cutoff = cutoff_base[C] + hp.get("cutoff_extra", 0)
+            if dim_max is not None and cutoff ** C > dim_max:
+                pulada = dict(exp=f"c{C}_v{V}_l{L}_{nome}", status="PULADO_DIMENSAO",
+                              C=C, V=V, L=L, cutoff=cutoff, dim=cutoff ** C, dim_max=dim_max)
+                anexar_csv(caminho("summary.csv", pasta), pulada)
+                linhas.append(pulada)
+                print(f"[PULADO] C={C} V={V} L={L}: cutoff={cutoff}, dimensão {cutoff}^{C} = "
+                      f"{cutoff ** C:,} > dim_max = {dim_max:,}")
+                continue
             linhas.append(executar_experimento(
                 C, V, L, cutoff, hp["max_iter"], hp["lr"], hp.get("lr_final"),
                 nome_hp=nome, pasta=pasta, **kw))

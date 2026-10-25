@@ -13,6 +13,8 @@ bloco                       pasta (dentro de qumodes/)       execuções
 vqe_ponte                   vqe_ponte                         gate do VQE
 tese_instancias             <pasta de cada bloco>             gate das tuplas (C, V, L)
 energia_cutoff              vqe_cutoff                        C=5 fixo; V=1 (TSP) e V=2 (VRP); d = 5, 7, ..., 29 (13 cutoffs cada)
+valido_otimo                vqe_valido_otimo                  17 tuplas (C=3-6 x V=1-5, V<=C; L=2; cutoff=C+1)
+grade_cv                    vqe_grade_cv                      12 tuplas (C=3-6 x V=1-3; L=2; cutoff=C*V); as de dimensão > DIM_MAX_CV são puladas
 v2_c3_grade                 vqe_tese_v2                       90 (C=3; V=1,2; L=1-3; 5 cutoffs x 3 lr)
 v2_c4                       vqe_tese_v2                       18 (C=4; V=1,2,3; L=1-3; lr 0,05 e 0,02)
 v2_c5                       vqe_tese_v2                       12 (C=5; V=1,2,3; L=1-2; lr 0,05 e 0,02)
@@ -48,7 +50,12 @@ são extrapolações, não medidas.
 # qual existe solução viável (toda instância tem solução e a restrição de
 # capacidade continua ativa). Um número fixa a capacidade (pode tornar a instância
 # inviável). FOLGA próxima de 1 = capacidade apertada; maior = mais soluções viáveis.
-Q_VAL = "auto"
+# Capacidade dos veículos:
+#   "desigual": DIFERENTE por veículo, com pelo menos uma solução garantida por
+#               construção (partição de referência sorteada; Q_v = ceil(FOLGA * carga))
+#   "auto":     igual para todos, construída da demanda total (pode inviabilizar tuplas)
+#   número:     igual e fixa para todos
+Q_VAL = "desigual"
 FOLGA = 1.2
 
 # Sobreparâmetros da tese: iterações, taxa de aprendizado (lr -> lr_final por
@@ -74,6 +81,33 @@ INSTANCIAS_ENERGIA = [(CIDADES_ENERGIA, V) for V in VEICULOS_ENERGIA]
 # "auto": 70% da memória EFETIVA, lida sem sudo (sistema.py: /proc/meminfo, cgroup e
 # SLURM; vale a menor). Um número fixa o limite em GB.
 MEMORIA_MAX_GB = "auto"
+
+# ---- teste: o VQE entrega um vetor VÁLIDO e ÓTIMO mesmo com cutoff pequeno? ---------
+# Cidades 3-6 x veículos 1-5 (V <= C), camadas fixas, cutoff = C + MARGEM_VO.
+# Com margem 1 o cutoff fica ABAIXO do nº de nós por modo (M*R) em vários casos
+# (ex.: 6 cidades, 3 veículos: 12 nós, cutoff 7): é exatamente o regime a testar.
+# Dimensão = (C + margem)^C: com margem 1, no máximo 7^6 = 117.649.
+PASTA_VO = "vqe_valido_otimo"
+CIDADES_VO = (3, 4, 5, 6)
+VEICULOS_VO = (1, 2, 3, 4, 5)
+CAMADAS_VO = 2
+MARGEM_VO = 1
+HP_VO = {f"m{MARGEM_VO}": dict(max_iter=300, lr=0.05, lr_final=0.005,
+                                cutoff_rel_C=MARGEM_VO)}
+DIM_MAX_VO = 200_000
+
+# ---- grade (C, V): cidades 3-6 x veículos 1-3, cutoff = C*V, 2 camadas ---------------
+PASTA_CV = "vqe_grade_cv"
+CIDADES_CV = (3, 4, 5, 6)
+VEICULOS_CV = (1, 2, 3)
+CAMADAS_CV = 2
+HP_CV = {"cv": dict(max_iter=300, lr=0.05, lr_final=0.005, cutoff_CxV=True)}
+# Dimensão do espaço de Fock = cutoff**C. Com cutoff = C*V:
+#   (3,1)=27  (3,2)=216  (3,3)=729  (4,1)=256  (4,2)=4.096  (4,3)=20.736
+#   (5,1)=3.125  (5,2)=100.000  (5,3)=759.375  (6,1)=46.656
+#   (6,2)=2.985.984  (6,3)=34.012.224   <- estes dois estão fora do alcance do VQE atual
+# Tuplas acima de DIM_MAX_CV são PULADAS e registradas (status PULADO_DIMENSAO).
+DIM_MAX_CV = 1_000_000
 
 # ---- vqe_tese_v2: todos os resultados novos vão para UMA pasta -------------------
 PASTA_V2 = "vqe_tese_v2"
@@ -107,8 +141,10 @@ EXECUTAR = {
     "informacao_sistema": True,            # memória e CPUs do servidor (sem sudo); vai para vqe_cutoff/sistema.txt
     "energia_cutoff": True,                # C=5; V=1 (TSP) e V=2 (VRP); cutoffs 5, 7, ..., 29
     # --- VQE (desligado; o estudo de energia NÃO usa VQE nem a ponte) ----------------------
-    "vqe_ponte": False,                    # roda antes de qualquer VQE; se falhar, o VQE é pulado
-    "tese_instancias": False,              # confere viabilidade de cada tupla antes de rodar o VQE
+    "valido_otimo": True,                  # C=3-6 x V=1-5 (V<=C), L=2, cutoff=C+1 -> pasta vqe_valido_otimo
+    "grade_cv": False,                     # C=3-6 x V=1-3, L=2, cutoff=C*V -> pasta vqe_grade_cv (usa o VQE)
+    "vqe_ponte": True,                     # roda antes de qualquer VQE; se falhar, o VQE é pulado
+    "tese_instancias": True,               # confere viabilidade de cada tupla antes de rodar o VQE
     # --- pasta vqe_tese_v2: critérios novos (ρ inicial/final, fundamental decodificado) ---
     "v2_c3_grade": False,                  # C=3, V=1,2, L=1-3, cutoff (C+k) x lr  (90 execuções)
     "v2_c4": False,                        # C=4, V=1,2,3, L=1-3, lr 0,05 e 0,02   (18 execuções)
@@ -149,7 +185,7 @@ def main():
     # ======================================================================
     # VQE: ponte, instâncias e resultados da tese
     # ======================================================================
-    blocos_vqe = ("vqe_ponte", "tese_instancias", "v2_c3_grade", "v2_c4", "v2_c5",
+    blocos_vqe = ("vqe_ponte", "tese_instancias", "valido_otimo", "grade_cv", "v2_c3_grade", "v2_c4", "v2_c5",
                   "tese_base", "tese_hiperparametros", "tese_cutoff", "tese_c4",
                   "vqe_pequeno", "vqe_varredura_c3", "vqe_varredura_c4", "vqe_c4")
     ponte_ok = False
@@ -161,7 +197,8 @@ def main():
         if not ponte_ok:
             print("\nA ponte FALHOU: o VQE foi pulado.")
 
-    if ponte_ok and (EXECUTAR["v2_c3_grade"] or EXECUTAR["v2_c4"] or EXECUTAR["v2_c5"]
+    if ponte_ok and (EXECUTAR["valido_otimo"] or EXECUTAR["grade_cv"] or EXECUTAR["v2_c3_grade"]
+                     or EXECUTAR["v2_c4"] or EXECUTAR["v2_c5"]
                      or EXECUTAR["tese_base"] or EXECUTAR["tese_hiperparametros"]
                      or EXECUTAR["tese_cutoff"] or EXECUTAR["tese_c4"]):
         import exp_vqe_tese as TV
@@ -195,6 +232,21 @@ def main():
             bloco_tese("v2_c5",
                        [(5, V, L) for V in (1, 2, 3) for L in (1, 2)],
                        HP_V2, PASTA_V2, n_checkpoints=10)
+
+        # --- vetor válido e ótimo com cutoff pequeno (C + margem), camadas fixas ---------
+        if EXECUTAR["valido_otimo"]:
+            tuplas_vo = sorted(((C, V, CAMADAS_VO) for C in CIDADES_VO
+                                for V in VEICULOS_VO if V <= C),
+                               key=lambda t: (t[0] + MARGEM_VO) ** t[0] * t[1])
+            bloco_tese("valido_otimo", tuplas_vo, HP_VO, PASTA_VO,
+                       dim_max=DIM_MAX_VO, n_checkpoints=10)
+
+        # --- grade (C, V): cutoff = C*V, 2 camadas; da menor para a maior dimensão ---------
+        if EXECUTAR["grade_cv"]:
+            tuplas_cv = sorted(((C, V, CAMADAS_CV) for C in CIDADES_CV for V in VEICULOS_CV),
+                               key=lambda t: (t[0] * t[1]) ** t[0])
+            bloco_tese("grade_cv", tuplas_cv, HP_CV, PASTA_CV,
+                       dim_max=DIM_MAX_CV, n_checkpoints=10)
 
         if EXECUTAR["tese_base"]:
             bloco_tese("tese_base",
