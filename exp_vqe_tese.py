@@ -155,6 +155,15 @@ def montar_instancia(C, V, seed=42, Q_val="auto", demand_range=(1, 5), folga=1.2
     fixa igual para todos."""
     g = Graph(C=C, V=V, is_warm_start=False, demand_range=demand_range, seed=seed)
     D, demands, _ = g.graph
+    if Q_val == "auto_ou_desigual":
+        # IGUAL entre veículos quando houver solução; DESIGUAL (viável por construção)
+        # só quando a igual não tiver nenhuma. Foi com capacidade igual que o estado
+        # fundamental preservou a rota ótima (C=5, V=2).
+        Q = np.array([capacidade_por_demanda(demands, V, folga)] * V, dtype=np.float64)
+        if V == 1 or enumerar_custos(D, V, demands, Q):
+            return g, D, demands, Q
+        Q = np.asarray(capacidade_desigual(demands, V, folga, seed), dtype=np.float64)
+        return g, D, demands, Q
     if Q_val == "desigual":
         Q = np.asarray(capacidade_desigual(demands, V, folga, seed), dtype=np.float64)
         return g, D, demands, Q
@@ -183,14 +192,9 @@ def _canon(rotas):
     return tuple(sorted(tuple(r) for r in rotas if r))
 
 
-def enumerar_solucoes(D, V, demands, Q, tol=1e-9):
-    """(custo ótimo, conjunto de soluções ótimas canônicas, nº de soluções viáveis
-    canônicas). A solução é o conjunto de rotas (rótulos de veículo ignorados); o
-    sentido de cada rota conta como solução distinta, como no POVM. Com capacidades
-    DIFERENTES por veículo, um conjunto de rotas é viável se ALGUMA atribuição de
-    rotas a veículos respeita as capacidades: a enumeração percorre todas as
-    atribuições rotuladas (a ordem das rotas na permutação é a ordem dos veículos),
-    então isso já está coberto."""
+def enumerar_custos(D, V, demands, Q):
+    """{solução canônica: custo} de TODAS as soluções viáveis (dicionário vazio se
+    não houver nenhuma). Mesma regra de enumerar_solucoes, que a usa."""
     C = D.shape[0] - 1
     custos = {}
     for perm in itertools.permutations(range(1, C + 1)):
@@ -206,6 +210,18 @@ def enumerar_solucoes(D, V, demands, Q, tol=1e-9):
             chave = _canon(rotas)
             if chave not in custos:
                 custos[chave] = _custo_rotas(D, rotas)
+    return custos
+
+
+def enumerar_solucoes(D, V, demands, Q, tol=1e-9):
+    """(custo ótimo, conjunto de soluções ótimas canônicas, nº de soluções viáveis
+    canônicas). A solução é o conjunto de rotas (rótulos de veículo ignorados); o
+    sentido de cada rota conta como solução distinta, como no POVM. Com capacidades
+    DIFERENTES por veículo, um conjunto de rotas é viável se ALGUMA atribuição de
+    rotas a veículos respeita as capacidades: a enumeração percorre todas as
+    atribuições rotuladas (a ordem das rotas na permutação é a ordem dos veículos),
+    então isso já está coberto."""
+    custos = enumerar_custos(D, V, demands, Q)
     if not custos:
         raise InfeasibleProblemError("nenhuma solução viável na enumeração")
     melhor = min(custos.values())
@@ -540,7 +556,8 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
                          pasta="vqe_tese", seed=42, Q_val="auto", demand_range=(1, 5),
                          folga=1.2, fd_eps=1e-2, theta_scale=0.05, checkpoint_cada=None,
                          n_checkpoints=20, shots_decodificacao=1024,
-                         figura_decodificacao=True, decodificacao="valida"):
+                         figura_decodificacao=True, decodificacao="valida",
+                         metricas_qualidade=False):
     from qumodes.ansatz import CircuitConfig         # o VQE precisa do SF; as funções
     from qumodes.solver import ProblemInstance, VQESolver   # auxiliares do módulo não
     exp = f"c{C}_v{V}_l{L}_{nome_hp}"
@@ -620,11 +637,14 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
     theta0 = solver.ansatz.generate_initial_theta(seed=seed, scale=theta_scale)
     log.info(f"VQE: P={len(theta0)} parâmetros, {2 * len(theta0) + 1} avaliações/iteração")
     checkpoints = []
+    dist_inicial = [None]                       # distribuição do estado em it = 0
 
     def cb(t, theta, energia):
         if t % checkpoint_cada != 0 and t != max_iter:
             return
         dist = _distribuicao(_estado(solver, theta, cutoff).ket(), inst, ops, cfgs)
+        if t == 0:
+            dist_inicial[0] = dist
         est = _estatisticas(dist, inst, D, optset, req, cap)
         dec = _decodificar(dist, inst, D, req, cap, shots_decodificacao, seed)
         cp = dict(it=t, energia=energia, p_valid=est["p_valid"], p_otima=est["p_otima"],
@@ -732,6 +752,12 @@ def executar_experimento(C, V, L, cutoff, max_iter, lr, lr_final, nome_hp="base"
         decodificacao=decodificacao, n_cfg_validas=(len(cfgs) if cfgs is not None else -1),
         nos_por_modo=X, cutoff_abaixo_dos_nos=int(cutoff < X),
         valido_e_otimo=int(bool(viavel) and abs(custo_dec - bf_custo) < 1e-9))
+    if metricas_qualidade:
+        # a rota do VQE está entre as MELHORES da força bruta? (exp_rota_boa.py)
+        from exp_rota_boa import colunas_qualidade
+        resultados.update(colunas_qualidade(
+            dict(uni=dist_u, ini=dist_inicial[0], fin=dist, gs=dist_gs),
+            inst, D, req, cap, enumerar_custos(D, V, demands, Q), seed=seed, log=log))
     payload = dict(
         experimento=exp, status="OK",
         config=dict(C=C, V=V, L=L, cutoff=cutoff, max_iter=max_iter, lr=lr,

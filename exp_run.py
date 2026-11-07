@@ -13,6 +13,7 @@ bloco                       pasta (dentro de qumodes/)       execuções
 vqe_ponte                   vqe_ponte                         gate do VQE
 tese_instancias             <pasta de cada bloco>             gate das tuplas (C, V, L)
 energia_cutoff              vqe_cutoff                        C=5 fixo; V=1 (TSP) e V=2 (VRP); d = 5, 7, ..., 29 (13 cutoffs cada)
+rota_boa                    vqe_rota_boa                      24 execuções (C=3-6 x V=1,2 x cutoff C+0/1/2; L=2)
 valido_otimo                vqe_valido_otimo                  17 tuplas (C=3-6 x V=1-5, V<=C; L=2; cutoff=C+1)
 grade_cv                    vqe_grade_cv                      12 tuplas (C=3-6 x V=1-3; L=2; cutoff=C*V); as de dimensão > DIM_MAX_CV são puladas
 v2_c3_grade                 vqe_tese_v2                       90 (C=3; V=1,2; L=1-3; 5 cutoffs x 3 lr)
@@ -82,6 +83,20 @@ INSTANCIAS_ENERGIA = [(CIDADES_ENERGIA, V) for V in VEICULOS_ENERGIA]
 # SLURM; vale a menor). Um número fixa o limite em GB.
 MEMORIA_MAX_GB = "auto"
 
+# ---- teste: a rota do VQE é VÁLIDA e BOA (entre as melhores da força bruta)? ---------
+# Cidades 3-6 (7 excluído: dimensão >= 823 mil), V = 1 (TSP) e 2 (VRP), 2 camadas,
+# cutoff = C + m com m = 0, 1, 2. Capacidade IGUAL quando viável (desigual só como
+# reserva). Só os checkpoints inicial e final. Métricas: exp_rota_boa.py.
+PASTA_RB = "vqe_rota_boa"
+CIDADES_RB = (3, 4, 5, 6)
+VEICULOS_RB = (1, 2)
+CAMADAS_RB = 2
+MARGENS_RB = (0, 1, 2)
+Q_VAL_RB = "auto_ou_desigual"
+HP_RB = {f"m{m}": dict(max_iter=300, lr=0.05, lr_final=0.005, cutoff_rel_C=m)
+         for m in MARGENS_RB}
+DIM_MAX_RB = 300_000          # maior caso: 8^6 = 262.144 (C=6, m=2)
+
 # ---- teste: o VQE entrega um vetor VÁLIDO e ÓTIMO mesmo com cutoff pequeno? ---------
 # Cidades 3-6 x veículos 1-5 (V <= C), camadas fixas, cutoff = C + MARGEM_VO.
 # Com margem 1 o cutoff fica ABAIXO do nº de nós por modo (M*R) em vários casos
@@ -139,9 +154,10 @@ EXECUTAR = {
     # ESTADO ATUAL: só o estudo de energia exata contra o cutoff está ligado.
     # Cidades FIXAS em 5; varia apenas o cutoff; duas versões: V=1 (TSP) e V=2 (VRP).
     "informacao_sistema": True,            # memória e CPUs do servidor (sem sudo); vai para vqe_cutoff/sistema.txt
-    "energia_cutoff": True,                # C=5; V=1 (TSP) e V=2 (VRP); cutoffs 5, 7, ..., 29
+    "energia_cutoff": False,                # C=5; V=1 (TSP) e V=2 (VRP); cutoffs 5, 7, ..., 29
     # --- VQE (desligado; o estudo de energia NÃO usa VQE nem a ponte) ----------------------
-    "valido_otimo": True,                  # C=3-6 x V=1-5 (V<=C), L=2, cutoff=C+1 -> pasta vqe_valido_otimo
+    "rota_boa": True,                      # C=3-6 x V=1,2, L=2, cutoff=C+0/1/2 -> pasta vqe_rota_boa
+    "valido_otimo": False,                  # C=3-6 x V=1-5 (V<=C), L=2, cutoff=C+1 -> pasta vqe_valido_otimo
     "grade_cv": False,                     # C=3-6 x V=1-3, L=2, cutoff=C*V -> pasta vqe_grade_cv (usa o VQE)
     "vqe_ponte": True,                     # roda antes de qualquer VQE; se falhar, o VQE é pulado
     "tese_instancias": True,               # confere viabilidade de cada tupla antes de rodar o VQE
@@ -185,7 +201,7 @@ def main():
     # ======================================================================
     # VQE: ponte, instâncias e resultados da tese
     # ======================================================================
-    blocos_vqe = ("vqe_ponte", "tese_instancias", "valido_otimo", "grade_cv", "v2_c3_grade", "v2_c4", "v2_c5",
+    blocos_vqe = ("vqe_ponte", "tese_instancias", "rota_boa", "valido_otimo", "grade_cv", "v2_c3_grade", "v2_c4", "v2_c5",
                   "tese_base", "tese_hiperparametros", "tese_cutoff", "tese_c4",
                   "vqe_pequeno", "vqe_varredura_c3", "vqe_varredura_c4", "vqe_c4")
     ponte_ok = False
@@ -197,16 +213,18 @@ def main():
         if not ponte_ok:
             print("\nA ponte FALHOU: o VQE foi pulado.")
 
-    if ponte_ok and (EXECUTAR["valido_otimo"] or EXECUTAR["grade_cv"] or EXECUTAR["v2_c3_grade"]
+    if ponte_ok and (EXECUTAR["rota_boa"] or EXECUTAR["valido_otimo"] or EXECUTAR["grade_cv"] or EXECUTAR["v2_c3_grade"]
                      or EXECUTAR["v2_c4"] or EXECUTAR["v2_c5"]
                      or EXECUTAR["tese_base"] or EXECUTAR["tese_hiperparametros"]
                      or EXECUTAR["tese_cutoff"] or EXECUTAR["tese_c4"]):
         import exp_vqe_tese as TV
 
-        def bloco_tese(nome, tuplas, hiperparametros, pasta, **extra):
+        def bloco_tese(nome, tuplas, hiperparametros, pasta, q_val=None,
+                       resumo_extra=None, **extra):
+            q_val = Q_VAL if q_val is None else q_val
             if EXECUTAR["tese_instancias"]:
                 with saida(f"instancias_{nome}.txt", pasta):
-                    viaveis = TV.verificar_instancias(tuplas, pasta=pasta, Q_val=Q_VAL,
+                    viaveis = TV.verificar_instancias(tuplas, pasta=pasta, Q_val=q_val,
                                                       folga=FOLGA)
             else:
                 viaveis = tuplas
@@ -215,8 +233,10 @@ def main():
                 return
             with saida(f"resultado_{nome}.txt", pasta):
                 linhas = TV.varredura_tese(viaveis, hiperparametros=hiperparametros,
-                                           pasta=pasta, Q_val=Q_VAL, folga=FOLGA, **extra)
+                                           pasta=pasta, Q_val=q_val, folga=FOLGA, **extra)
                 TV.resumo_tese(linhas)
+                if resumo_extra is not None:
+                    resumo_extra(linhas)
 
         # --- vqe_tese_v2: critérios novos; todos os resultados na MESMA pasta ---------
         if EXECUTAR["v2_c3_grade"]:
@@ -232,6 +252,15 @@ def main():
             bloco_tese("v2_c5",
                        [(5, V, L) for V in (1, 2, 3) for L in (1, 2)],
                        HP_V2, PASTA_V2, n_checkpoints=10)
+
+        # --- rota válida e boa: C=3-6, V=1,2, cutoff C+0/1/2, da menor para a maior dim ---
+        if EXECUTAR["rota_boa"]:
+            from exp_rota_boa import resumo_rota_boa
+            tuplas_rb = sorted(((C, V, CAMADAS_RB) for C in CIDADES_RB for V in VEICULOS_RB),
+                               key=lambda t: (t[0] + 2) ** t[0] * t[1])
+            bloco_tese("rota_boa", tuplas_rb, HP_RB, PASTA_RB, q_val=Q_VAL_RB,
+                       resumo_extra=resumo_rota_boa, dim_max=DIM_MAX_RB,
+                       n_checkpoints=1, metricas_qualidade=True)
 
         # --- vetor válido e ótimo com cutoff pequeno (C + margem), camadas fixas ---------
         if EXECUTAR["valido_otimo"]:
