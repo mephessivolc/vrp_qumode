@@ -162,3 +162,82 @@ def resumo_rota_boa(linhas):
               f"{f('q_fin_p_top5pct'):>10.4f}{f('q_gs_p_top5pct'):>9.4f}"
               f"{f('q_rho_top5'):>7.2f}{'sim' if r['q_treino_top5'] else 'nao':>8}"
               f"{'sim' if r['q_rota_boa'] else 'nao':>5}")
+
+
+# ---------------------------------------------------------------------------------
+# efeito do NÚMERO DE CAMADAS (instância, semente e cutoff fixos; só L varia)
+# ---------------------------------------------------------------------------------
+def _ok(linhas):
+    return sorted((r for r in linhas if r.get("status") == "OK" and "q_rota_boa" in r),
+                  key=lambda r: int(r["L"]))
+
+
+def resumo_camadas(linhas):
+    ok = _ok(linhas)
+    print("\n" + "=" * 124)
+    print("EFEITO DAS CAMADAS — mesma instância, mesma semente, mesmo cutoff; só o nº de camadas L muda")
+    print("P5@1024 = P(a melhor rota em 1024 medições estar entre as 5% melhores); "
+          "E-E0 = distância da energia final do VQE à menor energia de H")
+    print("=" * 124)
+    if not ok:
+        print("  nenhuma execução concluída")
+        return
+    r0 = ok[0]
+    print(f"  instância C={r0['C']} V={r0['V']} cutoff={r0['cutoff']} Q={r0.get('Q')}  "
+          f"C*={float(r0['c_star']):.3f}  soluções viáveis={r0['q_n_solucoes']} (5% melhores: "
+          f"posição <= {r0['q_k5']})  acaso P5@1024={float(r0['q_uni_p_top5_em_1024']):.2f}  "
+          f"fundamental P5@1024={float(r0['q_gs_p_top5_em_1024']):.2f}")
+    print(f"{'L':>3}{'params':>8}{'E_final':>10}{'E-E0':>9}{'P(válida)':>11}{'x acaso':>9}"
+          f"{'rank@1024':>11}{'gap@1024%':>11}{'P5@1024 ini':>13}{'P5@1024 fin':>13}"
+          f"{'rho_top5':>10}{'tempo':>10}")
+    for r in ok:
+        f = lambda k: float(r.get(k, "nan"))
+        print(f"{int(r['L']):>3}{int(r['params']):>8}{f('E_vqe_final'):>10.2f}"
+              f"{f('E_vqe_final') - f('E0'):>9.2f}{f('q_fin_p_valid'):>11.4f}"
+              f"{f('q_fin_p_valid') / f('q_uni_p_valid'):>9.2f}{int(r['q_fin_rank1024']):>11}"
+              f"{f('q_fin_gap1024'):>11.2f}{f('q_ini_p_top5_em_1024'):>13.2f}"
+              f"{f('q_fin_p_top5_em_1024'):>13.2f}{f('q_rho_top5'):>10.2f}"
+              f"{f('tempo_vqe') / 3600:>9.1f}h")
+
+
+def figura_camadas(linhas, pasta):
+    """Dois painéis contra L: (a) P(melhor rota em 1024 medições nas 5% melhores) do
+    VQE, com as retas do acaso e do fundamental; (b) distância E_final - E0."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from saidas import gerenciador
+
+    ok = _ok(linhas)
+    if len(ok) < 2:
+        return
+    L = [int(r["L"]) for r in ok]
+    p5 = [float(r["q_fin_p_top5_em_1024"]) for r in ok]
+    p5_ini = [float(r["q_ini_p_top5_em_1024"]) for r in ok]
+    dE = [float(r["E_vqe_final"]) - float(r["E0"]) for r in ok]
+    uni = float(ok[0]["q_uni_p_top5_em_1024"])
+    gs = float(ok[0]["q_gs_p_top5_em_1024"])
+    C, V, d = ok[0]["C"], ok[0]["V"], ok[0]["cutoff"]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.8))
+    ax1.plot(L, p5, "o-", color="tab:red", lw=1.8, label="VQE (estado final)")
+    ax1.plot(L, p5_ini, "s:", color="tab:gray", lw=1.2, label="VQE (estado inicial)")
+    ax1.axhline(uni, ls="--", color="tab:blue", lw=1.2, label=f"acaso = {uni:.2f}")
+    ax1.axhline(gs, ls="--", color="tab:green", lw=1.2, label=f"fundamental de H = {gs:.2f}")
+    ax1.set_xlabel("Número de camadas $L$")
+    ax1.set_ylabel("P(melhor rota em 1024 medições entre as 5% melhores)")
+    ax1.set_ylim(-0.02, 1.05)
+    ax1.set_xticks(L)
+    ax1.set_title(f"Qualidade da rota — C={C}, V={V}, cutoff={d}")
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=8, loc="best")
+    ax2.plot(L, dE, "o-", color="tab:purple", lw=1.8)
+    ax2.set_xlabel("Número de camadas $L$")
+    ax2.set_ylabel("$E_{\\mathrm{VQE}} - E_0$")
+    ax2.set_xticks(L)
+    ax2.set_title("Distância da energia final à menor energia de $H$")
+    ax2.grid(True, alpha=0.3)
+    fig.tight_layout()
+    gm = gerenciador(pasta)
+    fig.savefig(gm.get_file_path(f"c{C}_v{V}_d{d}_camadas.png", is_figure=True), dpi=300)
+    plt.close(fig)

@@ -13,6 +13,7 @@ bloco                       pasta (dentro de qumodes/)       execuções
 vqe_ponte                   vqe_ponte                         gate do VQE
 tese_instancias             <pasta de cada bloco>             gate das tuplas (C, V, L)
 energia_cutoff              vqe_cutoff                        C=5 fixo; V=1 (TSP) e V=2 (VRP); d = 5, 7, ..., 29 (13 cutoffs cada)
+camadas                     vqe_camadas                       6 execuções (C=5, V=2, semente 42, cutoff 7; L=1..6)
 rota_boa                    vqe_rota_boa                      24 execuções (C=3-6 x V=1,2 x cutoff C+0/1/2; L=2)
 valido_otimo                vqe_valido_otimo                  17 tuplas (C=3-6 x V=1-5, V<=C; L=2; cutoff=C+1)
 grade_cv                    vqe_grade_cv                      12 tuplas (C=3-6 x V=1-3; L=2; cutoff=C*V); as de dimensão > DIM_MAX_CV são puladas
@@ -82,6 +83,20 @@ INSTANCIAS_ENERGIA = [(CIDADES_ENERGIA, V) for V in VEICULOS_ENERGIA]
 # "auto": 70% da memória EFETIVA, lida sem sudo (sistema.py: /proc/meminfo, cgroup e
 # SLURM; vale a menor). Um número fixa o limite em GB.
 MEMORIA_MAX_GB = "auto"
+
+# ---- teste: MAIS CAMADAS melhoram o aprendizado do VQE? -----------------------------
+# Instância, semente e cutoff FIXOS; só o número de camadas L varia. C=5, V=2, d=7:
+# o caso em que o VQE superou o acaso (0,82 contra 0,39) e o fundamental chega a ~1,00,
+# então há margem para as camadas mostrarem efeito. Mesmas métricas da rota_boa,
+# mais a distância E_final - E0. Tempo estimado: ~1,4 h por camada (L=2: ~2,8 h);
+# L = 1 a 6 somam cerca de 30 h.
+PASTA_L = "vqe_camadas"
+CIDADES_L = 5
+VEICULOS_L = 2
+SEMENTE_L = 42
+MARGEM_L = 2                 # cutoff = C + 2 = 7
+CAMADAS_L = (1, 2, 3, 4, 5, 6)
+HP_L = {f"m{MARGEM_L}": dict(max_iter=300, lr=0.05, lr_final=0.005, cutoff_rel_C=MARGEM_L)}
 
 # ---- teste: a rota do VQE é VÁLIDA e BOA (entre as melhores da força bruta)? ---------
 # Cidades 3-6 (7 excluído: dimensão >= 823 mil), V = 1 (TSP) e 2 (VRP), 2 camadas,
@@ -156,7 +171,8 @@ EXECUTAR = {
     "informacao_sistema": True,            # memória e CPUs do servidor (sem sudo); vai para vqe_cutoff/sistema.txt
     "energia_cutoff": False,                # C=5; V=1 (TSP) e V=2 (VRP); cutoffs 5, 7, ..., 29
     # --- VQE (desligado; o estudo de energia NÃO usa VQE nem a ponte) ----------------------
-    "rota_boa": True,                      # C=3-6 x V=1,2, L=2, cutoff=C+0/1/2 -> pasta vqe_rota_boa
+    "camadas": True,                       # C=5, V=2, semente 42, cutoff 7, L=1..6 -> pasta vqe_camadas
+    "rota_boa": False,                      # C=3-6 x V=1,2, L=2, cutoff=C+0/1/2 -> pasta vqe_rota_boa
     "valido_otimo": False,                  # C=3-6 x V=1-5 (V<=C), L=2, cutoff=C+1 -> pasta vqe_valido_otimo
     "grade_cv": False,                     # C=3-6 x V=1-3, L=2, cutoff=C*V -> pasta vqe_grade_cv (usa o VQE)
     "vqe_ponte": True,                     # roda antes de qualquer VQE; se falhar, o VQE é pulado
@@ -201,7 +217,7 @@ def main():
     # ======================================================================
     # VQE: ponte, instâncias e resultados da tese
     # ======================================================================
-    blocos_vqe = ("vqe_ponte", "tese_instancias", "rota_boa", "valido_otimo", "grade_cv", "v2_c3_grade", "v2_c4", "v2_c5",
+    blocos_vqe = ("vqe_ponte", "tese_instancias", "camadas", "rota_boa", "valido_otimo", "grade_cv", "v2_c3_grade", "v2_c4", "v2_c5",
                   "tese_base", "tese_hiperparametros", "tese_cutoff", "tese_c4",
                   "vqe_pequeno", "vqe_varredura_c3", "vqe_varredura_c4", "vqe_c4")
     ponte_ok = False
@@ -213,7 +229,7 @@ def main():
         if not ponte_ok:
             print("\nA ponte FALHOU: o VQE foi pulado.")
 
-    if ponte_ok and (EXECUTAR["rota_boa"] or EXECUTAR["valido_otimo"] or EXECUTAR["grade_cv"] or EXECUTAR["v2_c3_grade"]
+    if ponte_ok and (EXECUTAR["camadas"] or EXECUTAR["rota_boa"] or EXECUTAR["valido_otimo"] or EXECUTAR["grade_cv"] or EXECUTAR["v2_c3_grade"]
                      or EXECUTAR["v2_c4"] or EXECUTAR["v2_c5"]
                      or EXECUTAR["tese_base"] or EXECUTAR["tese_hiperparametros"]
                      or EXECUTAR["tese_cutoff"] or EXECUTAR["tese_c4"]):
@@ -225,7 +241,7 @@ def main():
             if EXECUTAR["tese_instancias"]:
                 with saida(f"instancias_{nome}.txt", pasta):
                     viaveis = TV.verificar_instancias(tuplas, pasta=pasta, Q_val=q_val,
-                                                      folga=FOLGA)
+                                                      folga=FOLGA, seed=extra.get("seed", 42))
             else:
                 viaveis = tuplas
             if not viaveis:
@@ -252,6 +268,18 @@ def main():
             bloco_tese("v2_c5",
                        [(5, V, L) for V in (1, 2, 3) for L in (1, 2)],
                        HP_V2, PASTA_V2, n_checkpoints=10)
+
+        # --- efeito das camadas: instância, semente e cutoff fixos; L = 1..6 ---------------
+        if EXECUTAR["camadas"]:
+            from exp_rota_boa import figura_camadas, resumo_camadas
+
+            def _resumo_camadas(ls):
+                resumo_camadas(ls)
+                figura_camadas(ls, PASTA_L)
+
+            bloco_tese("camadas", [(CIDADES_L, VEICULOS_L, L) for L in CAMADAS_L], HP_L,
+                       PASTA_L, q_val=Q_VAL_RB, resumo_extra=_resumo_camadas,
+                       seed=SEMENTE_L, n_checkpoints=10, metricas_qualidade=True)
 
         # --- rota válida e boa: C=3-6, V=1,2, cutoff C+0/1/2, da menor para a maior dim ---
         if EXECUTAR["rota_boa"]:
