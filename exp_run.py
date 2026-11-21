@@ -12,6 +12,7 @@ do path.py). Cada bloco usa a sua pasta (nomes em minúsculas):
 bloco                       pasta (dentro de qumodes/)       execuções
 vqe_ponte                   vqe_ponte                         gate do VQE
 tese_instancias             <pasta de cada bloco>             gate das tuplas (C, V, L)
+energia_configuracao        vqe_cutoff_config/igual|desigual  C=5, V=2, d=5,7,9: topk do fundamental e λ (artigo)
 energia_cutoff              vqe_cutoff                        C=5 fixo; V=1 (TSP) e V=2 (VRP); d = 5, 7, ..., 29 (13 cutoffs cada)
 camadas                     vqe_camadas                       6 execuções (C=5, V=2, semente 42, cutoff 7; L=1..6)
 rota_boa                    vqe_rota_boa                      24 execuções (C=3-6 x V=1,2 x cutoff C+0/1/2; L=2)
@@ -83,6 +84,22 @@ INSTANCIAS_ENERGIA = [(CIDADES_ENERGIA, V) for V in VEICULOS_ENERGIA]
 # "auto": 70% da memória EFETIVA, lida sem sudo (sistema.py: /proc/meminfo, cgroup e
 # SLURM; vale a menor). Um número fixa o limite em GB.
 MEMORIA_MAX_GB = "auto"
+
+# ---- energia: configuração decodificada do fundamental (Figura 1 e Tabela 1 do artigo)
+# Mesma instância (semente 42), 5 cidades e 2 veículos, só d = 5, 7, 9. As DUAS versões
+# de capacidade do artigo, cada uma na sua subpasta:
+#   igual     "auto_ou_desigual" -> 10/10 (a versão em que o fundamental decodifica a ótima)
+#   desigual  "desigual"         -> 12/8
+# Salva as 5 configurações e as 5 soluções mais prováveis (runs/*.json, chave "topk") e
+# os parâmetros do Hamiltoniano (λ, ħ, M, R, Q) de V = 1 e V = 2 em
+# parametros_hamiltoniano.txt. A decodificação usa só as configurações válidas, então
+# pode cobrir qualquer cutoff da lista (ex.: tuple(range(5, 26, 2)), que é demorado
+# por causa da diagonalização em d alto, não da decodificação).
+PASTA_CONFIG = "vqe_cutoff_config"
+CUTOFFS_CONFIG = (5, 7, 9)
+CIDADES_CONFIG = 5
+VEICULOS_CONFIG = (2,)
+CAPACIDADES_CONFIG = {"igual": "auto_ou_desigual", "desigual": "desigual"}
 
 # ---- teste: MAIS CAMADAS melhoram o aprendizado do VQE? -----------------------------
 # Instância, semente e cutoff FIXOS; só o número de camadas L varia. C=5, V=2, d=7:
@@ -168,15 +185,16 @@ EXECUTAR = {
     # --- resultados da tese (CVRP; instâncias do Graph; capacidade ativa) ----------
     # ESTADO ATUAL: só o estudo de energia exata contra o cutoff está ligado.
     # Cidades FIXAS em 5; varia apenas o cutoff; duas versões: V=1 (TSP) e V=2 (VRP).
-    "informacao_sistema": True,            # memória e CPUs do servidor (sem sudo); vai para vqe_cutoff/sistema.txt
+    "informacao_sistema": False,            # memória e CPUs do servidor (sem sudo); vai para vqe_cutoff/sistema.txt
     "energia_cutoff": False,                # C=5; V=1 (TSP) e V=2 (VRP); cutoffs 5, 7, ..., 29
+    "energia_configuracao": True,          # C=5, V=2, d=5,7,9, capacidade igual e desigual: topk + λ -> vqe_cutoff_config
     # --- VQE (desligado; o estudo de energia NÃO usa VQE nem a ponte) ----------------------
-    "camadas": True,                       # C=5, V=2, semente 42, cutoff 7, L=1..6 -> pasta vqe_camadas
+    "camadas": False,                       # C=5, V=2, semente 42, cutoff 7, L=1..6 -> pasta vqe_camadas
     "rota_boa": False,                      # C=3-6 x V=1,2, L=2, cutoff=C+0/1/2 -> pasta vqe_rota_boa
     "valido_otimo": False,                  # C=3-6 x V=1-5 (V<=C), L=2, cutoff=C+1 -> pasta vqe_valido_otimo
     "grade_cv": False,                     # C=3-6 x V=1-3, L=2, cutoff=C*V -> pasta vqe_grade_cv (usa o VQE)
-    "vqe_ponte": True,                     # roda antes de qualquer VQE; se falhar, o VQE é pulado
-    "tese_instancias": True,               # confere viabilidade de cada tupla antes de rodar o VQE
+    "vqe_ponte": False,                     # roda antes de qualquer VQE; se falhar, o VQE é pulado
+    "tese_instancias": False,               # confere viabilidade de cada tupla antes de rodar o VQE
     # --- pasta vqe_tese_v2: critérios novos (ρ inicial/final, fundamental decodificado) ---
     "v2_c3_grade": False,                  # C=3, V=1,2, L=1-3, cutoff (C+k) x lr  (90 execuções)
     "v2_c4": False,                        # C=4, V=1,2,3, L=1-3, lr 0,05 e 0,02   (18 execuções)
@@ -333,6 +351,35 @@ def main():
 
         with saida("sistema.txt", PASTA_ENERGIA):
             print(relatorio_sistema())
+
+    if EXECUTAR["energia_configuracao"]:
+        import dataclasses
+
+        import exp_energia_cutoff as EC
+        from exp_vqe_tese import HBAR, _hamiltoniano, _q_texto, montar_instancia
+
+        for nome_q, q_val in CAPACIDADES_CONFIG.items():
+            pasta_q = f"{PASTA_CONFIG}/{nome_q}"
+            # parâmetros do Hamiltoniano (λ, ħ) do TSP (V=1) e do VRP (V=2)
+            with saida("parametros_hamiltoniano.txt", pasta_q):
+                print(f"HBAR = {HBAR}   capacidade = {nome_q} ({q_val})   FOLGA = {FOLGA}")
+                for V_p in (1, 2):
+                    g_p, D_p, dem_p, Q_p = montar_instancia(CIDADES_CONFIG, V_p, 42, q_val,
+                                                            (1, 5), FOLGA)
+                    inst_p, par_p = _hamiltoniano(CIDADES_CONFIG, V_p, D_p, dem_p, Q_p)
+                    print(f"\nC={CIDADES_CONFIG} V={V_p}  M={inst_p.M}  R={inst_p.R}  "
+                          f"Q={_q_texto(Q_p)}  demandas={list(dem_p)}")
+                    for chave, valor in dataclasses.asdict(par_p).items():
+                        print(f"  {chave} = {valor}")
+            # energia, decodificação e topk em cada cutoff
+            with saida("resultado_energia_configuracao.txt", pasta_q):
+                for V_e in VEICULOS_CONFIG:
+                    linhas_e, metricas_e = EC.energia_vs_cutoff(
+                        C=CIDADES_CONFIG, V=V_e, cutoffs=CUTOFFS_CONFIG, pasta=pasta_q,
+                        Q_val=q_val, folga=FOLGA, memoria_max_gb=MEMORIA_MAX_GB,
+                        decodificar_ate=max(CUTOFFS_CONFIG))
+                    print(f"\n##### C={CIDADES_CONFIG} V={V_e} capacidade {nome_q} #####")
+                    EC.resumo_energia_cutoff(linhas_e, metricas_e)
 
     if EXECUTAR["energia_cutoff"]:
         import exp_energia_cutoff as EC

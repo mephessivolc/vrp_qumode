@@ -31,6 +31,7 @@ Cuidado de leitura: o ajuste de lei de potência supõe que E0 -> C* quando d ->
 Se E0 estabilizar acima de C*, o expoente ajustado subestima o piso; a extrapolação
 é só uma ordem de grandeza.
 """
+import dataclasses
 import math
 import time
 
@@ -41,8 +42,11 @@ from scipy.stats import spearmanr
 import qumodes.hamiltonian as H
 import qumodes.hamiltonian_sparse as HS
 from brute_force import BruteForce
-from exp_vqe_tese import (HBAR, _decodificar, _estatisticas, _hamiltoniano, _q_texto,
-                          anexar_csv, enumerar_solucoes, montar_instancia)
+import exp_vqe_tese as TV
+import qumodes.sf_bridge as SB
+from exp_vqe_tese import (HBAR, _canon, _custo_rotas, _decodificar, _estatisticas,
+                          _hamiltoniano, _q_texto, anexar_csv, enumerar_solucoes,
+                          montar_instancia)
 from logger import setup_logger
 from saidas import caminho, gerenciador
 from utils import format_timespan, save_experiment_json
@@ -94,10 +98,49 @@ def metricas_relacao(ds, e0):
                 inclinacao_E0_d=float(np.polyfit(ds, e0, 1)[0]))
 
 
+def _topk(dist, inst, D, optset, req, cap, k=5):
+    """As k CONFIGURAÇÕES (par (v, r) de cada cidade) e as k SOLUÇÕES (conjuntos de
+    rotas, somando os arranjos da mesma solução) mais prováveis entre as válidas,
+    com probabilidade, rotas, custo e se a solução é ótima. Aceita a distribuição
+    completa (ndarray) ou só as válidas (exp_vqe_tese.DistValida). slot = v*R + r."""
+    if isinstance(dist, TV.DistValida):
+        pares = [(tuple(int(x) for x in c), float(p))
+                 for c, p in zip(dist.cfgs, dist.probs) if p > 1e-15]
+    else:
+        flat = np.clip(dist.reshape(-1), 0.0, None)
+        flat = flat / flat.sum()
+        pares = []
+        for f in np.flatnonzero(flat > 1e-12):
+            slots = tuple(int(x) for x in np.unravel_index(int(f), dist.shape))
+            if SB.is_valid_assignment(slots, inst, req, cap):
+                pares.append((slots, float(flat[f])))
+    cfgs, massas, custos = [], {}, {}
+    for slots, prob in pares:
+        rotas = [[int(c) for c in r] for r in SB.routes_from_slots(slots, inst)]
+        custo = _custo_rotas(D, rotas)
+        cfgs.append(dict(slots=list(slots), vr=[list(divmod(s, inst.R)) for s in slots],
+                         prob=prob, rotas=rotas, custo=custo))
+        chave = _canon(rotas)
+        massas[chave] = massas.get(chave, 0.0) + prob
+        custos[chave] = custo
+    cfgs.sort(key=lambda c: -c["prob"])
+    sols = sorted(massas.items(), key=lambda kv: -kv[1])[:k]
+    return dict(configuracoes=cfgs[:k],
+                solucoes=[dict(rotas=[list(r) for r in chave], massa=m, custo=custos[chave],
+                               otima=chave in optset) for chave, m in sols],
+                p_valid=float(sum(massas.values())))
+
+
 def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutoff",
                       seed=42, Q_val="auto", folga=1.2, demand_range=(1, 5),
                       memoria_max_gb=16.0, decodificar_ate=9, ncv_grande=24,
-                      tol=1e-9, shots=1024):
+                      tol=1e-9, shots=1024, decodificacao="valida", salvar_topk=True):
+    """decodificacao="valida": a decodificação do fundamental usa SÓ as configurações
+    válidas (exp_vqe_tese.configuracoes_validas), com números idênticos aos da
+    distribuição completa e custo pequeno perto da diagonalização, de modo que
+    decodificar_ate pode cobrir todos os cutoffs. "completa": a forma antiga.
+    salvar_topk: grava no JSON (chave "topk") as 5 configurações e as 5 soluções
+    mais prováveis de cada cutoff decodificado."""
     exp = f"c{C}_v{V}"
     gm = gerenciador(pasta)
     log = setup_logger(name=f"{exp}_energia_cutoff",
@@ -117,7 +160,14 @@ def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutof
     inst, par = _hamiltoniano(C, V, D, demands, Q)
     req, cap = V > 1, V > 1
     X = inst.M * inst.R
-    est_u = _estatisticas(np.full((X,) * C, 1.0 / float(X) ** C), inst, D, optset, req, cap)
+    cfgs = TV.configuracoes_validas(inst, req, cap) if decodificacao == "valida" else None
+    if cfgs is not None:
+        dist_u = TV.DistValida(cfgs, np.full(len(cfgs), 1.0 / float(X) ** C))
+        log.info(f"decodificação só nas {len(cfgs)} configurações válidas (de {X}^{C})")
+    else:
+        dist_u = np.full((X,) * C, 1.0 / float(X) ** C)
+    est_u = _estatisticas(dist_u, inst, D, optset, req, cap)
+    topk = {}
     log.info(f"instância C={C} V={V} R={inst.R} Q={_q_texto(Q)} demandas={list(demands)}")
     log.info(f"força bruta: C*={c_star:.4f} rotas={bf_rotas} #ótimas={len(optset)} "
              f"#viáveis={n_viaveis}")
@@ -142,7 +192,7 @@ def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutof
         t0 = time.time()
         try:
             gs = HS.ground_state_sparse(inst, ops, par, k=1, ncv=ncv, tol=tol,
-                                        decode=decodificar)
+                                        decode=(decodificar and cfgs is None))
         except MemoryError as err:
             linha.update(status="ERRO_MEMORIA", erro=str(err))
             log.error(f"d={d}: MemoryError")
@@ -154,8 +204,12 @@ def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutof
         linha.update(status="OK", E0=e0, overhead=e0 - c_star, razao_E0_cstar=e0 / c_star,
                      residual=gs["residual"], converged=int(gs["converged"]),
                      n_matvec=gs["n_matvec"], tempo_s=round(t, 1))
-        if decodificar and gs.get("distribution") is not None:
+        dist = None
+        if decodificar and cfgs is not None:
+            dist = TV.distribuicao_valida(gs["psi"], inst, ops, cfgs)
+        elif decodificar and gs.get("distribution") is not None:
             dist = np.asarray(gs["distribution"], dtype=np.float64)
+        if dist is not None:
             est = _estatisticas(dist, inst, D, optset, req, cap)
             dec = _decodificar(dist, inst, D, req, cap, shots, seed)
             custo_dec = dec[0] if dec is not None else float("nan")
@@ -163,7 +217,10 @@ def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutof
                                  if est_u["p_otima"] > 0 else float("nan")),
                          gs_p_otima=est["p_otima"], gs_p_valid=est["p_valid"],
                          gs_top_otima=int(est["top_otima"]), gs_custo_dec=custo_dec,
-                         gs_ok_custo=int(dec is not None and abs(custo_dec - c_star) < 1e-9))
+                         gs_ok_custo=int(dec is not None and abs(custo_dec - c_star) < 1e-9),
+                         gs_top_custo=est["top_custo"], gs_top_massa=est["top_massa"])
+            if salvar_topk:
+                topk[d] = _topk(dist, inst, D, optset, req, cap)
         log.info(f"d={d:>2} dim={dim:>10,}  E0={e0:10.4f}  E0-C*={e0 - c_star:9.4f}  "
                  f"resíduo={gs['residual']:.1e}  conv={gs['converged']}  "
                  f"{format_timespan(t)}  (~{gb:.1f} GB)")
@@ -205,7 +262,10 @@ def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutof
                    instancia=dict(coords=g.graph.coords, D=D, demands=demands),
                    forca_bruta=dict(custo=c_star, rotas=bf_rotas, n_otimas=len(optset),
                                     n_viaveis=n_viaveis),
-                   tabela=linhas, ajustes=ajustes, metricas_relacao=metricas)
+                   tabela=linhas, ajustes=ajustes, metricas_relacao=metricas,
+                   hamiltoniano=dict(HBAR=HBAR, M=inst.M, R=inst.R,
+                                     parametros=dataclasses.asdict(par)),
+                   topk={str(k): v for k, v in topk.items()})
     save_experiment_json(payload, str(gm.get_file_path(f"energia_cutoff_{exp}.json", subdir="runs")))
     return linhas, metricas
 
