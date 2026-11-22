@@ -12,6 +12,7 @@ do path.py). Cada bloco usa a sua pasta (nomes em minúsculas):
 bloco                       pasta (dentro de qumodes/)       execuções
 vqe_ponte                   vqe_ponte                         gate do VQE
 tese_instancias             <pasta de cada bloco>             gate das tuplas (C, V, L)
+vies_perfil                 vqe_cutoff_config/igual|desigual  o caso 12/8 é viés de perfil? (critérios C1-C4)
 energia_configuracao        vqe_cutoff_config/igual|desigual  C=5, V=2, d=5,7,9: topk do fundamental e λ (artigo)
 energia_cutoff              vqe_cutoff                        C=5 fixo; V=1 (TSP) e V=2 (VRP); d = 5, 7, ..., 29 (13 cutoffs cada)
 camadas                     vqe_camadas                       6 execuções (C=5, V=2, semente 42, cutoff 7; L=1..6)
@@ -96,10 +97,16 @@ MEMORIA_MAX_GB = "auto"
 # pode cobrir qualquer cutoff da lista (ex.: tuple(range(5, 26, 2)), que é demorado
 # por causa da diagonalização em d alto, não da decodificação).
 PASTA_CONFIG = "vqe_cutoff_config"
-CUTOFFS_CONFIG = (5, 7, 9)
+CUTOFFS_CONFIG = (5, 7, 9, 13)      # para todos de 5 a 25: tuple(range(5, 26, 2))
 CIDADES_CONFIG = 5
 VEICULOS_CONFIG = (2,)
 CAPACIDADES_CONFIG = {"igual": "auto_ou_desigual", "desigual": "desigual"}
+
+# ---- teste do viés de perfil no caso 12/8 (pendência do artigo) -------------------------
+# Parte A lê o fundamental decodificado do bloco energia_configuracao (rode-o antes ou
+# junto, na mesma execução: ele vem primeiro). Parte B: estado-produto dos nós, por
+# termo e perfil, sem diagonalizar. Use cutoffs que a parte A também tenha.
+CUTOFFS_VIES = (5, 7, 9, 13)
 
 # ---- teste: MAIS CAMADAS melhoram o aprendizado do VQE? -----------------------------
 # Instância, semente e cutoff FIXOS; só o número de camadas L varia. C=5, V=2, d=7:
@@ -187,6 +194,7 @@ EXECUTAR = {
     # Cidades FIXAS em 5; varia apenas o cutoff; duas versões: V=1 (TSP) e V=2 (VRP).
     "informacao_sistema": False,            # memória e CPUs do servidor (sem sudo); vai para vqe_cutoff/sistema.txt
     "energia_cutoff": False,                # C=5; V=1 (TSP) e V=2 (VRP); cutoffs 5, 7, ..., 29
+    "vies_perfil": True,                   # o 12/8 é viés de perfil? (artigo) -> vqe_cutoff_config/igual|desigual
     "energia_configuracao": True,          # C=5, V=2, d=5,7,9, capacidade igual e desigual: topk + λ -> vqe_cutoff_config
     # --- VQE (desligado; o estudo de energia NÃO usa VQE nem a ponte) ----------------------
     "camadas": False,                       # C=5, V=2, semente 42, cutoff 7, L=1..6 -> pasta vqe_camadas
@@ -380,6 +388,15 @@ def main():
                         decodificar_ate=max(CUTOFFS_CONFIG))
                     print(f"\n##### C={CIDADES_CONFIG} V={V_e} capacidade {nome_q} #####")
                     EC.resumo_energia_cutoff(linhas_e, metricas_e)
+
+    if EXECUTAR["vies_perfil"]:
+        import exp_vies_perfil as VP
+
+        for nome_q, q_val in CAPACIDADES_CONFIG.items():
+            pasta_q = f"{PASTA_CONFIG}/{nome_q}"
+            with saida("resultado_vies_perfil.txt", pasta_q):
+                VP.teste_vies(C=CIDADES_CONFIG, V=2, cutoffs=CUTOFFS_VIES, pasta=pasta_q,
+                              Q_val=q_val, folga=FOLGA)
 
     if EXECUTAR["energia_cutoff"]:
         import exp_energia_cutoff as EC

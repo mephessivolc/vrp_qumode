@@ -131,6 +131,71 @@ def _topk(dist, inst, D, optset, req, cap, k=5):
                 p_valid=float(sum(massas.values())))
 
 
+def _perfil(chave):
+    """Perfil de uma solução: números de cidades por rota, em ordem crescente
+    (ex.: (2, 3) ou (1, 4) para 5 cidades e 2 veículos)."""
+    return tuple(sorted(len(r) for r in chave))
+
+
+def perfis_fundamental(dist, dist_u, inst, optset, tabela, req, cap):
+    """Leitura do fundamental POR PERFIL de rotas (teste do viés de perfil).
+
+    tabela: {solução canônica: custo} de todas as soluções viáveis
+    (exp_vqe_tese.enumerar_custos). Por perfil: nº de soluções, massa no fundamental
+    e no acaso (rho_perfil = razão), melhor custo do perfil e a solução mais provável
+    do perfil. Global: perfil das ótimas, perfil da solução mais provável, se ela é a
+    de menor custo do seu perfil, e delta_c = melhor custo do perfil favorecido - C*."""
+    def massas(dd):
+        out = {}
+        if isinstance(dd, TV.DistValida):
+            pares = zip(dd.cfgs, dd.probs)
+        else:
+            flat = np.clip(dd.reshape(-1), 0.0, None)
+            flat = flat / flat.sum()
+            pares = []
+            for f in np.flatnonzero(flat > 1e-12):
+                sl = np.unravel_index(int(f), dd.shape)
+                if SB.is_valid_assignment(sl, inst, req, cap):
+                    pares.append((sl, float(flat[f])))
+        for sl, w in pares:
+            k = _canon(SB.routes_from_slots(sl, inst))
+            out[k] = out.get(k, 0.0) + float(w)
+        return out
+
+    m_gs, m_u = massas(dist), massas(dist_u)
+    c_star = min(tabela.values())
+    por = {}
+    for k, custo in tabela.items():
+        p = por.setdefault(_perfil(k), dict(n_solucoes=0, massa_gs=0.0, massa_unif=0.0,
+                                            melhor_custo=float("inf"), _top=None))
+        p["n_solucoes"] += 1
+        p["massa_gs"] += m_gs.get(k, 0.0)
+        p["massa_unif"] += m_u.get(k, 0.0)
+        p["melhor_custo"] = min(p["melhor_custo"], custo)
+        if p["_top"] is None or m_gs.get(k, 0.0) > m_gs.get(p["_top"], 0.0):
+            p["_top"] = k
+    saida_p = {}
+    for perf, p in sorted(por.items()):
+        k = p.pop("_top")
+        saida_p["-".join(map(str, perf))] = dict(
+            p, rho_perfil=(p["massa_gs"] / p["massa_unif"] if p["massa_unif"] > 0
+                           else float("nan")),
+            top_custo=tabela[k], top_massa=m_gs.get(k, 0.0),
+            top_e_melhor_do_perfil=bool(abs(tabela[k] - p["melhor_custo"]) < 1e-9))
+    k_top = max(m_gs, key=m_gs.get) if m_gs else None
+    perf_top = _perfil(k_top) if k_top is not None else None
+    perf_ot = sorted({_perfil(k) for k in optset})
+    melhor_top = (min(c for k, c in tabela.items() if _perfil(k) == perf_top)
+                  if perf_top else float("nan"))
+    return dict(perfis=saida_p,
+                perfil_otima=["-".join(map(str, x)) for x in perf_ot],
+                perfil_top=("-".join(map(str, perf_top)) if perf_top else None),
+                top_custo=(tabela.get(k_top, float("nan")) if k_top else float("nan")),
+                top_e_melhor_do_perfil=bool(k_top is not None
+                                            and abs(tabela[k_top] - melhor_top) < 1e-9),
+                delta_c=float(melhor_top - c_star))
+
+
 def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutoff",
                       seed=42, Q_val="auto", folga=1.2, demand_range=(1, 5),
                       memoria_max_gb=16.0, decodificar_ate=9, ncv_grande=24,
@@ -167,7 +232,8 @@ def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutof
     else:
         dist_u = np.full((X,) * C, 1.0 / float(X) ** C)
     est_u = _estatisticas(dist_u, inst, D, optset, req, cap)
-    topk = {}
+    topk, perfis = {}, {}
+    tabela_sol = TV.enumerar_custos(D, V, demands, Q)
     log.info(f"instância C={C} V={V} R={inst.R} Q={_q_texto(Q)} demandas={list(demands)}")
     log.info(f"força bruta: C*={c_star:.4f} rotas={bf_rotas} #ótimas={len(optset)} "
              f"#viáveis={n_viaveis}")
@@ -221,6 +287,13 @@ def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutof
                          gs_top_custo=est["top_custo"], gs_top_massa=est["top_massa"])
             if salvar_topk:
                 topk[d] = _topk(dist, inst, D, optset, req, cap)
+            if V > 1:
+                pf = perfis_fundamental(dist, dist_u, inst, optset, tabela_sol, req, cap)
+                perfis[d] = pf
+                linha.update(perfil_otima="/".join(pf["perfil_otima"]),
+                             perfil_top=pf["perfil_top"],
+                             top_melhor_do_perfil=int(pf["top_e_melhor_do_perfil"]),
+                             delta_c_perfil=pf["delta_c"])
         log.info(f"d={d:>2} dim={dim:>10,}  E0={e0:10.4f}  E0-C*={e0 - c_star:9.4f}  "
                  f"resíduo={gs['residual']:.1e}  conv={gs['converged']}  "
                  f"{format_timespan(t)}  (~{gb:.1f} GB)")
@@ -265,7 +338,8 @@ def energia_vs_cutoff(C=5, V=2, cutoffs=tuple(range(5, 30, 2)), pasta="vqe_cutof
                    tabela=linhas, ajustes=ajustes, metricas_relacao=metricas,
                    hamiltoniano=dict(HBAR=HBAR, M=inst.M, R=inst.R,
                                      parametros=dataclasses.asdict(par)),
-                   topk={str(k): v for k, v in topk.items()})
+                   topk={str(k): v for k, v in topk.items()},
+                   perfis={str(k): v for k, v in perfis.items()})
     save_experiment_json(payload, str(gm.get_file_path(f"energia_cutoff_{exp}.json", subdir="runs")))
     return linhas, metricas
 
