@@ -76,7 +76,7 @@ HP_VARIANTES = {
 # cutoffs de 5 a 29, de 2 em 2. LIMITE É A MEMÓRIA: o script estima o uso antes de
 # cada cutoff e PULA os que passarem de MEMORIA_MAX_GB. Ajuste ao RAM disponível
 # (com R=4: d=21 ~ 7 GB, d=25 ~ 17 GB, d=29 ~ 36 GB).
-PASTA_ENERGIA = "vqe_cutoff"
+PASTA_ENERGIA = "vqe_cutoff_new"
 CUTOFFS_ENERGIA = tuple(range(5, 30, 2))
 CIDADES_ENERGIA = 5                    # FIXO: o número de cidades não varia
 VEICULOS_ENERGIA = (1, 2)              # 1 = TSP;  2 = VRP (capacidade ativa)
@@ -96,7 +96,7 @@ MEMORIA_MAX_GB = "auto"
 # pode cobrir qualquer cutoff da lista (ex.: tuple(range(5, 26, 2)), que é demorado
 # por causa da diagonalização em d alto, não da decodificação).
 PASTA_CONFIG = "vqe_cutoff_config"
-CUTOFFS_CONFIG = (5, 7, 9)
+CUTOFFS_CONFIG = tuple(range(5, 26, 2)) #(5, 7, 9)
 CIDADES_CONFIG = 5
 VEICULOS_CONFIG = (2,)
 CAPACIDADES_CONFIG = {"igual": "auto_ou_desigual", "desigual": "desigual"}
