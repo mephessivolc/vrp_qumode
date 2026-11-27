@@ -195,7 +195,7 @@ EXECUTAR = {
     "informacao_sistema": False,            # memória e CPUs do servidor (sem sudo); vai para vqe_cutoff/sistema.txt
     "energia_cutoff": False,                # C=5; V=1 (TSP) e V=2 (VRP); cutoffs 5, 7, ..., 29
     "vies_perfil": True,                   # o 12/8 é viés de perfil? (artigo) -> vqe_cutoff_config/igual|desigual
-    "energia_configuracao": True,          # C=5, V=2, d=5,7,9, capacidade igual e desigual: topk + λ -> vqe_cutoff_config
+    "energia_configuracao": False,          # C=5, V=2, d=5,7,9, capacidade igual e desigual: topk + λ -> vqe_cutoff_config
     # --- VQE (desligado; o estudo de energia NÃO usa VQE nem a ponte) ----------------------
     "camadas": False,                       # C=5, V=2, semente 42, cutoff 7, L=1..6 -> pasta vqe_camadas
     "rota_boa": False,                      # C=3-6 x V=1,2, L=2, cutoff=C+0/1/2 -> pasta vqe_rota_boa

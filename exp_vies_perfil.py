@@ -97,12 +97,16 @@ def sobra_por_perfil(inst, ops, par, D, cfgs, req):
 
 
 def _ler_perfis_gs(pasta, C, V):
+    """(perfis, topk) do JSON do bloco energia_configuracao; dicionários vazios se
+    não houver. JSONs gerados antes da chave "perfis" ainda têm "topk", que basta
+    para C1 e C2 (a solução mais provável é a primeira de topk[d]["solucoes"])."""
     try:
         arq = gerenciador(pasta).get_file_path(f"energia_cutoff_c{C}_v{V}.json", subdir="runs")
         with open(arq, encoding="utf-8") as fh:
-            return json.load(fh).get("perfis", {})
+            dados = json.load(fh)
+        return dados.get("perfis", {}), dados.get("topk", {})
     except (OSError, ValueError):
-        return {}
+        return {}, {}
 
 
 def teste_vies(C=5, V=2, cutoffs=(5, 7, 9, 13), pasta="vqe_cutoff_config/desigual",
@@ -119,7 +123,17 @@ def teste_vies(C=5, V=2, cutoffs=(5, 7, 9, 13), pasta="vqe_cutoff_config/desigua
         melhor_por_perfil[p] = min(melhor_por_perfil.get(p, float("inf")), c)
     cfgs = TV.configuracoes_validas(inst, req, cap)
     perf_ot = sorted({_perfil(k) for k in otimas})
-    gs = _ler_perfis_gs(pasta, C, V)
+    gs, topk_gs = _ler_perfis_gs(pasta, C, V)
+    rotulo = lambda p: "-".join(map(str, p))
+    for d_txt, tk in topk_gs.items():          # parte A a partir do topk, se faltar "perfis"
+        if d_txt in gs or not tk.get("solucoes"):
+            continue
+        s0 = tk["solucoes"][0]
+        p0 = _perfil(_canon(s0["rotas"]))
+        gs[d_txt] = dict(perfil_top=rotulo(p0), perfil_otima=[rotulo(p) for p in perf_ot],
+                         top_custo=s0["custo"],
+                         top_e_melhor_do_perfil=bool(abs(s0["custo"] - melhor_por_perfil[p0])
+                                                     < 1e-9))
 
     print("=" * 108)
     print(f"VIÉS DE PERFIL?  C={C} V={V} Q={_q_texto(Q)} demandas={list(demands)}  "
